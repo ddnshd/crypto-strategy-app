@@ -1,7 +1,7 @@
 import json
 import logging
 import httpx
-from app.config import settings
+from app.services.llm_config import get_llm_config
 
 logger = logging.getLogger(__name__)
 
@@ -67,30 +67,34 @@ PASTIKAN output adalah JSON yang valid. Jangan tambahkan teks di luar JSON."""
 
 
 class AIClient:
-    def __init__(self):
-        self.base_url = settings.LLM_BASE_URL.rstrip("/")
-        self.api_key = settings.LLM_API_KEY
-        self.model = settings.LLM_MODEL
-        self.max_tokens = settings.LLM_MAX_TOKENS
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+    """Thin client for an OpenAI-compatible chat API.
 
-    async def _chat_completion(self, messages: list, temperature: float = 0.3) -> str:
+    Connection settings are read dynamically from the runtime LLM config
+    (see app.services.llm_config) so changes via the settings API apply
+    immediately without restarting the backend.
+    """
+
+    async def _chat_completion(self, messages: list, temperature: float = None) -> str:
         """Call OpenAI-compatible chat completions endpoint."""
+        cfg = get_llm_config(include_secret=True)
+        if temperature is None:
+            temperature = cfg["temperature_chat"]
         payload = {
-            "model": self.model,
+            "model": cfg["model"],
             "messages": messages,
-            "max_tokens": self.max_tokens,
+            "max_tokens": cfg["max_tokens"],
             "temperature": temperature,
             "stream": False,
         }
+        headers = {
+            "Authorization": f"Bearer {cfg['api_key']}",
+            "Content-Type": "application/json",
+        }
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                f"{self.base_url}/chat/completions",
+                f"{cfg['base_url']}/chat/completions",
                 json=payload,
-                headers=self.headers,
+                headers=headers,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -121,7 +125,8 @@ Konversikan ke format strategi JSON yang terstruktur."""
         ]
 
         try:
-            content = await self._chat_completion(messages, temperature=0.3)
+            cfg = get_llm_config(include_secret=True)
+            content = await self._chat_completion(messages, temperature=cfg["temperature_generate"])
 
             # Extract JSON from markdown code blocks if present
             if "```json" in content:
@@ -145,6 +150,7 @@ Konversikan ke format strategi JSON yang terstruktur."""
     async def explain_strategy(self, strategy_def: dict) -> str:
         """Generate human-readable explanation of a strategy."""
         try:
+            cfg = get_llm_config(include_secret=True)
             content = await self._chat_completion([
                 {
                     "role": "system",
@@ -154,7 +160,7 @@ Konversikan ke format strategi JSON yang terstruktur."""
                     "role": "user",
                     "content": f"Jelaskan strategi ini:\n{json.dumps(strategy_def, indent=2, ensure_ascii=False)}"
                 }
-            ], temperature=0.5)
+            ], temperature=cfg["temperature_explain"])
             return content
         except Exception as e:
             logger.error(f"Explain strategy error: {e}")
@@ -167,7 +173,8 @@ Konversikan ke format strategi JSON yang terstruktur."""
             "content": "Kamu adalah AI assistant ahli trading crypto dan analisis teknikal. Bantu user dalam bahasa Indonesia untuk memahami, membuat, dan mengoptimalkan strategi trading mereka."
         }
         try:
-            return await self._chat_completion([system_msg] + messages, temperature=0.7)
+            cfg = get_llm_config(include_secret=True)
+            return await self._chat_completion([system_msg] + messages, temperature=cfg["temperature_chat"])
         except Exception as e:
             logger.error(f"Chat error: {e}")
             raise

@@ -118,6 +118,7 @@ async function loadTab(tab) {
   else if (tab === 'library') await loadLibrary();
   else if (tab === 'backtest') await loadBacktest();
   else if (tab === 'signals') await loadSignals();
+  else if (tab === 'settings') await loadSettings();
 }
 window.loadTab = loadTab;
 
@@ -195,7 +196,7 @@ function loadBuilder() {
     '</div>' +
     '<label class="label">Timeframe</label><select id="builder-tf"><option value="15m">15m</option><option value="1h" selected>1h</option><option value="4h">4h</option><option value="1d">1d</option></select>' +
     '<button class="btn btn-primary" onclick="buildStrategy()">🚀 Generate dengan AI</button>' +
-    '<p class="hint mt-1">Butuh backend + AI online. Saat offline, hasil tidak bisa di-generate (data lokal tetap bisa dibuka).</p></div>' +
+    '<p class="hint mt-1">Butuh backend + AI online. Kunci & model diatur di tab ⚙️ AI. Saat offline, hasil tidak bisa di-generate (data lokal tetap bisa dibuka).</p></div>' +
     '<div id="builder-result"></div>';
 }
 window.buildStrategy = async function () {
@@ -467,3 +468,90 @@ async function loadSignals() {
     }).join('');
 }
 window.loadSignals = loadSignals;
+
+async function loadSettings() {
+  var el = document.getElementById('tab-settings');
+  el.innerHTML = '<div class="card"><h3>⏳ Memuat pengaturan AI...</h3></div>';
+  var cfg = null;
+  if (await checkConnection()) {
+    try {
+      cfg = await api('/api/v1/settings/ai');
+      saveCache('cs_ai_settings', cfg);
+    } catch (e) { cfg = loadCache('cs_ai_settings', null); showToast('Gagal load: ' + e.message, 'error'); }
+  } else {
+    cfg = loadCache('cs_ai_settings', null);
+  }
+  if (!cfg) {
+    el.innerHTML = '<div class="empty-state"><div class="icon">⚙️</div><p>Backend offline dan belum ada cache.<br>Nyalakan backend untuk mengatur AI.</p></div>';
+    return;
+  }
+  el.innerHTML =
+    '<div class="card accent"><h3>⚙️ Pengaturan AI</h3>' +
+    '<p>Endpoint OpenAI-compatible + model + temperatur. API key tidak pernah ditampilkan penuh.</p>' +
+    '<div class="kv"><span>Status</span><b>' + (ONLINE ? '<span class="text-green">● Online</span>' : '<span class="text-red">● Offline (cache)</span>') + '</b></div>' +
+    '<div class="kv"><span>API key</span><b>' + esc(cfg.api_key || '-') + '</b></div></div>' +
+    '<div class="card"><h3>🔌 Koneksi</h3>' +
+    '<label class="label">Base URL</label>' +
+    '<input class="input" id="ai-base-url" value="' + esc(cfg.base_url || '') + '" placeholder="https://.../v1" inputmode="url">' +
+    '<label class="label">API key baru (kosongkan = tidak diubah)</label>' +
+    '<input class="input" id="ai-key" type="password" placeholder="••••" autocomplete="off">' +
+    '<label class="label">Model</label>' +
+    '<input class="input" id="ai-model" list="ai-models" value="' + esc(cfg.model || '') + '">' +
+    '<datalist id="ai-models"><option value="ag/claude-sonnet-4-6"></option><option value="gpt-4o"></option><option value="gpt-4o-mini"></option></datalist>' +
+    '<label class="label">Max tokens (100–32000)</label>' +
+    '<input class="input" id="ai-max" type="number" min="100" max="32000" step="100" value="' + esc(cfg.max_tokens != null ? cfg.max_tokens : 2000) + '">' +
+    '<div class="btn-row"><button class="btn btn-primary" onclick="saveAISettings()">💾 Simpan</button>' +
+    '<button class="btn btn-secondary" onclick="testAISettings()">🧪 Tes koneksi</button></div>' +
+    '<div id="ai-test-result"></div></div>' +
+    '<div class="card"><h3>🌡️ Temperatur (0–2)</h3>' +
+    '<p class="hint">Generate: kreativitas saat menyusun strategi. Explain/chat: gaya bahasa penjelasan & diskusi.</p>' +
+    '<label class="label">Generate strategi</label>' +
+    '<input class="input" id="ai-temp-gen" type="number" min="0" max="2" step="0.1" value="' + esc(cfg.temperature_generate != null ? cfg.temperature_generate : 0.3) + '">' +
+    '<label class="label">Penjelasan</label>' +
+    '<input class="input" id="ai-temp-exp" type="number" min="0" max="2" step="0.1" value="' + esc(cfg.temperature_explain != null ? cfg.temperature_explain : 0.5) + '">' +
+    '<label class="label">Chat</label>' +
+    '<input class="input" id="ai-temp-chat" type="number" min="0" max="2" step="0.1" value="' + esc(cfg.temperature_chat != null ? cfg.temperature_chat : 0.7) + '">' +
+    '<button class="btn btn-primary" onclick="saveAISettings()">💾 Simpan temperatur</button></div>';
+}
+window.loadSettings = loadSettings;
+
+window.saveAISettings = async function () {
+  if (!ONLINE && !(await checkConnection())) { showToast('Offline — butuh backend online', 'error'); return; }
+  function num(id) {
+    var v = (document.getElementById(id).value || '').trim();
+    return v === '' ? null : Number(v);
+  }
+  var payload = {
+    base_url: (document.getElementById('ai-base-url').value || '').trim() || null,
+    api_key: (document.getElementById('ai-key').value || '') || null,
+    model: (document.getElementById('ai-model').value || '').trim() || null,
+    max_tokens: num('ai-max'),
+    temperature_generate: num('ai-temp-gen'),
+    temperature_explain: num('ai-temp-exp'),
+    temperature_chat: num('ai-temp-chat')
+  };
+  Object.keys(payload).forEach(function (k) { if (payload[k] === null) delete payload[k]; });
+  if (!Object.keys(payload).length) { showToast('Tidak ada perubahan', 'error'); return; }
+  showLoading();
+  try {
+    var cfg = await api('/api/v1/settings/ai', 'PUT', payload);
+    saveCache('cs_ai_settings', cfg);
+    showToast('Pengaturan AI tersimpan!', 'success');
+    await loadSettings();
+  } catch (e) { showToast('Gagal: ' + e.message, 'error'); }
+  hideLoading();
+};
+
+window.testAISettings = async function () {
+  if (!ONLINE && !(await checkConnection())) { showToast('Offline — butuh backend online', 'error'); return; }
+  var r = document.getElementById('ai-test-result');
+  if (r) r.innerHTML = '<p class="hint mt-1">🧪 Menghubungi AI...</p>';
+  try {
+    var res = await api('/api/v1/settings/ai/test', 'POST');
+    if (r) r.innerHTML = '<div class="card good mt-1"><h3>✅ AI terhubung</h3><p>' + esc(res.reply || 'ok') + '</p></div>';
+    showToast('AI terhubung!', 'success');
+  } catch (e) {
+    if (r) r.innerHTML = '<div class="card warn mt-1"><h3>❌ Gagal</h3><p>' + esc(e.message) + '</p></div>';
+    showToast('Gagal: ' + e.message, 'error');
+  }
+};
