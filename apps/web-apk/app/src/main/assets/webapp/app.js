@@ -404,22 +404,53 @@ async function loadHistory(sid) {
 window.runBacktest = async function (presetId) {
   var sid = presetId || (document.getElementById('bt-id') || {}).value;
   if (!sid) { showToast('Pilih strategi dulu', 'error'); return; }
-  if (!ONLINE && !(await checkConnection())) { showToast('Offline — backtest butuh backend', 'error'); return; }
+  var ok = ONLINE || await checkConnection();
+  if (!ok) {
+    for (var i = 0; i < apiCandidates().length && !ok; i++) {
+      try {
+        var r = await fetchTimeout(apiCandidates()[i] + '/health', {}, 4000);
+        if (r.ok) { API_BASE = apiCandidates()[i]; ok = true; ONLINE = true; setConn(true); }
+      } catch (e) {}
+    }
+  }
+  if (!ok) { showToast('Offline — backtest butuh backend', 'error'); return; }
   var pair = (document.getElementById('bt-pair') || {}).value || 'BTC/USDT';
   var tf = (document.getElementById('bt-tf') || {}).value || '1h';
   showLoading();
+  var resEl = document.getElementById('backtest-result');
+  if (resEl) resEl.innerHTML = '<div class="card"><h3>⏳ Backtest berjalan...</h3><p>Fetching data + simulasi. Biasanya 10-30 detik.</p><div id="bt-progress" class="hint">Memulai...</div></div>';
   try {
     var start = await api('/api/v1/backtest/run', 'POST', { strategy_id: sid, pair: pair, timeframe: tf });
     var bid = start.backtest_id;
-    showToast('Backtest jalan... polling hasil', 'success');
     var res = null;
-    for (var i = 0; i < 30; i++) {
+    for (var i = 0; i < 60; i++) {
       await new Promise(function (r) { setTimeout(r, 2000); });
-      try { res = await api('/api/v1/backtest/' + bid); if (res && res.id) break; } catch (e) {}
+      var prog = document.getElementById('bt-progress');
+      if (prog) prog.textContent = 'Polling... (' + (i + 1) + '/60)';
+      try {
+        res = await api('/api/v1/backtest/' + bid);
+        if (res && res.status === 'failed') {
+          if (resEl) resEl.innerHTML = '<div class="card warn"><h3>❌ Backtest gagal</h3><p>' + esc(res.error || 'Unknown error') + '</p>' +
+            '<div class="btn-row"><button class="btn btn-secondary" onclick="runBacktest(\'' + sid + '\')">🔄 Coba lagi</button></div></div>';
+          showToast('Backtest gagal: ' + (res.error || 'error'), 'error');
+          hideLoading();
+          return;
+        }
+        if (res && res.status === 'running') continue;
+        if (res && res.id && res.total_trades !== undefined) break;
+      } catch (e) {}
     }
-    if (res && res.id) showBacktestData(res);
-    else showToast('Masih running, coba Lihat hasil terbaru nanti', 'error');
-  } catch (e) { showToast('Gagal: ' + e.message, 'error'); }
+    if (res && res.id && res.total_trades !== undefined) showBacktestData(res);
+    else {
+      if (resEl) resEl.innerHTML = '<div class="card warn"><h3>⏱ Timeout</h3><p>Backtest butuh waktu lebih lama dari biasanya.</p>' +
+        '<p class="hint">Coba gunakan pair yang lebih likuid (BTC/USDT) atau timeframe lebih besar (4h/1d).</p>' +
+        '<div class="btn-row"><button class="btn btn-secondary" onclick="runBacktest(\'' + sid + '\')">🔄 Coba lagi</button></div></div>';
+      showToast('Timeout — coba lagi nanti', 'error');
+    }
+  } catch (e) {
+    showToast('Gagal: ' + e.message, 'error');
+    if (resEl) resEl.innerHTML = '<div class="card warn"><h3>❌ Error</h3><p>' + esc(e.message) + '</p></div>';
+  }
   hideLoading();
 };
 window.showBacktest = async function (bid) {
@@ -432,7 +463,11 @@ function showBacktestData(res) {
   var r = document.getElementById('backtest-result');
   if (!r) return;
   var wr = Number(res.win_rate || 0);
-  r.innerHTML = '<div class="card good"><h3>📊 Hasil Backtest</h3>' +
+  var dir = res.direction || 'long';
+  var dirLabel = dir === 'short' ? '📉 SHORT' : '📈 LONG';
+  var commission = res.total_commission || 0;
+  var h = '<div class="card good"><h3>📊 Hasil Backtest</h3>' +
+    '<div class="kv"><span>Direction</span><b>' + dirLabel + '</b></div>' +
     '<div class="grid-2">' +
     '<div class="stat"><b>' + res.total_trades + '</b><span>Trades</span></div>' +
     '<div class="stat"><b>' + wr.toFixed(1) + '%</b><span>Win rate</span></div>' +
@@ -440,8 +475,40 @@ function showBacktestData(res) {
     '<div class="stat"><b>' + Number(res.score || 0).toFixed(1) + '</b><span>Skor</span></div>' +
     '<div class="stat"><b>' + Number(res.total_return || 0).toFixed(1) + '%</b><span>Return</span></div>' +
     '<div class="stat"><b>' + Number(res.max_drawdown || 0).toFixed(1) + '%</b><span>Max DD</span></div>' +
-    '</div><canvas class="chart" id="eqchart" width="400" height="120"></canvas>' +
-    '<p class="hint mt-1">' + (res.is_qualified ? '✅ Lolos kualifikasi (skor ≥ 50). Bisa aktifkan scanner.' : '⚠️ Belum lolos (skor < 50).') + '</p></div>';
+    '</div>' +
+    '<div class="grid-2">' +
+    '<div class="stat"><b>' + Number(res.sharpe_ratio || 0).toFixed(2) + '</b><span>Sharpe</span></div>' +
+    '<div class="stat"><b>' + Number(res.avg_rr || 0).toFixed(2) + '</b><span>Avg R:R</span></div>' +
+    '<div class="stat"><b>$' + commission.toFixed(2) + '</b><span>Commission</span></div>' +
+    '<div class="stat"><b>' + (res.winning_trades || 0) + '/' + (res.losing_trades || 0) + '</b><span>Win/Loss</span></div>' +
+    '</div>' +
+    '<canvas class="chart" id="eqchart" width="400" height="120"></canvas>';
+  if (res.error) h += '<p class="hint mt-1">⚠️ Catatan: ' + esc(res.error) + '</p>';
+  h += '<p class="hint mt-1">' + (res.is_qualified ? '✅ Lolos kualifikasi (skor ≥ 50). Bisa aktifkan scanner.' : '⚠️ Belum lolos (skor < 50).') + '</p></div>';
+  if (res.walk_forward) {
+    var wf = res.walk_forward;
+    h += '<div class="card"><h3>🔀 Walk-Forward Analysis</h3>';
+    if (wf.in_sample && wf.out_of_sample) {
+      h += '<div class="grid-2">' +
+        '<div class="kv"><span>In-sample</span><b>WR ' + Number(wf.in_sample.win_rate * 100).toFixed(1) + '% • PF ' + Number(wf.in_sample.profit_factor).toFixed(2) + ' • skor ' + Number(wf.in_sample.avg_score || 0).toFixed(1) + '</b></div>' +
+        '<div class="kv"><span>Out-of-sample</span><b>WR ' + Number(wf.out_of_sample.win_rate * 100).toFixed(1) + '% • PF ' + Number(wf.out_of_sample.profit_factor).toFixed(2) + ' • skor ' + Number(wf.out_of_sample.avg_score || 0).toFixed(1) + '</b></div>' +
+        '</div>';
+      var deg = Number(wf.degradation_pct || 0);
+      var degColor = deg < 10 ? '#22dd88' : (deg < 25 ? '#ffb020' : '#ff5b6e');
+      h += '<p class="hint">Degradasi: <span style="color:' + degColor + '">' + deg.toFixed(1) + '%</span> ' +
+        (deg < 10 ? '✅ Konsisten' : (deg < 25 ? '⚠️ Sedikit overfit' : '❌ Overfitting')) + '</p>';
+    }
+    if (wf.folds && wf.folds.length) {
+      h += '<details class="mt-1"><summary class="hint">Detail ' + wf.folds.length + ' folds</summary>';
+      wf.folds.forEach(function (f, idx) {
+        h += '<div class="kv"><span>Fold ' + (idx + 1) + ' (' + esc(f.period || '') + ')</span>' +
+          '<b>WR ' + Number(f.win_rate * 100).toFixed(1) + '% • ' + f.total_trades + ' trades • skor ' + Number(f.score || 0).toFixed(1) + '</b></div>';
+      });
+      h += '</details>';
+    }
+    h += '</div>';
+  }
+  r.innerHTML = h;
   drawEquity(res.equity_curve || []);
 }
 function drawEquity(curve) {

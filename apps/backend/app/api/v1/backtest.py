@@ -17,6 +17,9 @@ def _json_safe(obj):
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/backtest", tags=["backtest"])
 
+# In-memory status tracker for running backtests
+_backtest_status = {}
+
 
 async def _run_and_save_backtest(
     strategy_id: str,
@@ -26,6 +29,7 @@ async def _run_and_save_backtest(
     db_session_factory,
 ):
     """Background task to run backtest and save results."""
+    _backtest_status[backtest_id] = {"status": "running", "error": None}
     backtester = Backtester()
     try:
         pair = request.pair or strategy.pair
@@ -42,7 +46,6 @@ async def _run_and_save_backtest(
         )
 
         async with db_session_factory() as session:
-            # Update strategy status first (before adding backtest)
             strat_result = await session.execute(
                 select(Strategy).where(Strategy.id == strategy_id)
             )
@@ -51,7 +54,6 @@ async def _run_and_save_backtest(
                 strat.is_backtested = True
                 strat.backtest_score = result["score"]
 
-            # Now add backtest result
             backtest = BacktestResult(
                 id=backtest_id,
                 strategy_id=strategy_id,
@@ -77,8 +79,12 @@ async def _run_and_save_backtest(
             session.add(backtest)
             await session.commit()
 
+        _backtest_status[backtest_id]["status"] = "done"
+
     except Exception as e:
         logger.error(f"Backtest failed for strategy {strategy_id}: {e}", exc_info=True)
+        _backtest_status[backtest_id]["status"] = "failed"
+        _backtest_status[backtest_id]["error"] = str(e)
 
 
 @router.post("/run", response_model=dict)
@@ -87,10 +93,6 @@ async def run_backtest(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Start a backtest run. Runs in background and returns immediately with backtest_id.
-    Poll GET /backtest/{backtest_id} to check results.
-    """
     result = await db.execute(select(Strategy).where(Strategy.id == request.strategy_id))
     strategy = result.scalar_one_or_none()
     if not strategy:
@@ -110,13 +112,12 @@ async def run_backtest(
     return {
         "backtest_id": backtest_id,
         "status": "running",
-        "message": "Backtest sedang dijalankan, poll GET /backtest/{backtest_id} untuk hasil"
+        "message": "Backtest sedang dijalankan"
     }
 
 
 @router.get("/strategy/{strategy_id}", response_model=list[BacktestResponse])
 async def get_strategy_backtests(strategy_id: str, db: AsyncSession = Depends(get_db)):
-    """Get all backtest results for a strategy."""
     result = await db.execute(
         select(BacktestResult)
         .where(BacktestResult.strategy_id == strategy_id)
@@ -125,13 +126,20 @@ async def get_strategy_backtests(strategy_id: str, db: AsyncSession = Depends(ge
     return result.scalars().all()
 
 
-@router.get("/{backtest_id}", response_model=BacktestResponse)
+@router.get("/{backtest_id}")
 async def get_backtest_result(backtest_id: str, db: AsyncSession = Depends(get_db)):
-    """Get backtest result by ID. Returns 404 while still running."""
+    # Check if still running or failed
+    status = _backtest_status.get(backtest_id)
+    if status:
+        if status["status"] == "running":
+            return {"id": backtest_id, "status": "running", "message": "Backtest masih dijalankan..."}
+        elif status["status"] == "failed":
+            return {"id": backtest_id, "status": "failed", "error": status.get("error", "Unknown error")}
+
     result = await db.execute(
         select(BacktestResult).where(BacktestResult.id == backtest_id)
     )
     backtest = result.scalar_one_or_none()
     if not backtest:
-        raise HTTPException(status_code=404, detail="Backtest result not found or still running")
+        return {"id": backtest_id, "status": "running", "message": "Backtest masih dijalankan..."}
     return backtest

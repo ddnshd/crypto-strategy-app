@@ -106,6 +106,9 @@ def compute_indicators(df: pd.DataFrame, conditions: list[dict]) -> pd.DataFrame
             elif indicator in ("PRICE", "CLOSE"):
                 pass  # use df["close"] directly
 
+            elif indicator == "VOLUME":
+                pass  # use df["volume"] directly
+
         except Exception as e:
             logger.warning(f"Failed to compute indicator {indicator}: {e}")
 
@@ -162,7 +165,7 @@ def evaluate_condition(df: pd.DataFrame, cond: dict) -> pd.Series:
         curr_below = lhs < rhs_series
         return prev_above & curr_below
     else:
-        logger.warning(f"Unknown operator: {operator}, returning all False")
+        logger.warning(f"Unknown operator '{operator}', returning all False")
         return pd.Series(False, index=df.index)
 
 
