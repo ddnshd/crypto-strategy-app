@@ -52,6 +52,9 @@ jobs:
           yes | $SDKMGR --licenses 2>/dev/null || true
           printf 'y\n' | $SDKMGR "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" 2>/dev/null || true
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+      - name: Pre-bundle JS
+        run: |
+          npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --assets-dest android/app/src/main/res
       - name: Generate debug keystore
         run: |
           keytool -genkeypair -v -keystore android/app/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null || true
