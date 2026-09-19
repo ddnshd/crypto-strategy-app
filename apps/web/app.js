@@ -58,7 +58,7 @@ async function api(path, method, body) {
   var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
   var r;
-  try { r = await fetchTimeout(API_BASE + path, opts, 15000); }
+  try { r = await fetchTimeout(API_BASE + path, opts, 90000); }
   catch (e) {
     LAST_ERROR = (e.name === 'AbortError' ? 'timeout 15s' : e.message) + ' @ ' + API_BASE + path;
     throw e;
@@ -215,7 +215,16 @@ function loadBuilder() {
 window.buildStrategy = async function () {
   var desc = (document.getElementById('builder-input').value || '').trim();
   if (!desc) { showToast('Tulis deskripsi dulu', 'error'); return; }
-  if (!ONLINE && !(await checkConnection())) { showToast('Offline — AI butuh backend online', 'error'); return; }
+  var ok = ONLINE || await checkConnection();
+  if (!ok) {
+    for (var i = 0; i < apiCandidates().length && !ok; i++) {
+      try {
+        var r = await fetchTimeout(apiCandidates()[i] + '/health', {}, 4000);
+        if (r.ok) { API_BASE = apiCandidates()[i]; ok = true; ONLINE = true; setConn(true); }
+      } catch (e) {}
+    }
+  }
+  if (!ok) { showToast('Offline — AI butuh backend online', 'error'); return; }
   showLoading();
   try {
     var res = await api('/api/v1/strategies/generate', 'POST', { user_input: desc, device_id: DEVICE_ID });
@@ -232,7 +241,13 @@ window.buildStrategy = async function () {
       '<label class="label">Nama simpan</label><input class="input" id="save-name" value="' + esc(st.name || 'Strategi baruku') + '">' +
       '<button class="btn btn-primary" onclick="saveAIStrategy()">💾 Simpan ke Library</button></div>';
     showToast('AI selesai', 'success');
-  } catch (e) { showToast('Gagal: ' + e.message, 'error'); }
+  } catch (e) {
+    showToast('Gagal: ' + e.message, 'error');
+    var r = document.getElementById('builder-result');
+    if (r) r.innerHTML = '<div class="card warn"><h3>❌ Generate gagal</h3><p>' + esc(e.message) + '</p>' +
+      '<p class="hint">Pastikan backend + AI online. Error: ' + esc(LAST_ERROR || '-') + '</p>' +
+      '<div class="btn-row"><button class="btn btn-secondary" onclick="buildStrategy()">🔄 Coba lagi</button></div></div>';
+  }
   hideLoading();
 };
 window.saveAIStrategy = async function () {
