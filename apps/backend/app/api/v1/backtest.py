@@ -39,6 +39,7 @@ async def _run_and_save_backtest(
             strategy_definition=strategy.definition,
             pair=pair,
             timeframe=timeframe,
+            period=request.period,
             start_date=request.start_date,
             end_date=request.end_date,
             initial_capital=request.initial_capital,

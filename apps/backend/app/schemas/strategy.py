@@ -94,6 +94,7 @@ class BacktestRequest(BaseModel):
     strategy_id: str
     pair: Optional[str] = None
     timeframe: Optional[str] = None
+    period: Optional[str] = None  # "1m","3m","6m","1y","2y" — overrides start_date/end_date
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     initial_capital: float = 1000.0

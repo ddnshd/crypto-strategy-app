@@ -66,6 +66,7 @@ class Backtester:
         strategy_definition: dict,
         pair: str,
         timeframe: str,
+        period: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         initial_capital: float = 1000.0,
@@ -73,9 +74,15 @@ class Backtester:
         commission_pct: float = DEFAULT_COMMISSION_PCT,
         slippage_pct: float = DEFAULT_SLIPPAGE_PCT,
     ) -> dict:
-        if not start_date:
-            start_date = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
-        if not end_date:
+        PERIOD_DAYS = {"1m": 30, "3m": 90, "6m": 180, "1y": 365, "2y": 730}
+        if not start_date and not end_date:
+            days = PERIOD_DAYS.get(period or "1y", 365)
+            start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+            end_date = datetime.utcnow().strftime("%Y-%m-%d")
+        elif not start_date:
+            days = PERIOD_DAYS.get(period or "1y", 365)
+            start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        elif not end_date:
             end_date = datetime.utcnow().strftime("%Y-%m-%d")
 
         try:

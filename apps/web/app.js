@@ -382,6 +382,8 @@ async function loadBacktest() {
     '<label class="label">Strategi</label><select id="bt-id">' + (opts || '<option value="">-- kosong --</option>') + '</select>' +
     '<div class="grid-2"><div><label class="label">Pair</label><select id="bt-pair"><option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option></select></div>' +
     '<div><label class="label">Timeframe</label><select id="bt-tf"><option value="15m">15m</option><option value="1h" selected>1h</option><option value="4h">4h</option><option value="1d">1d</option></select></div></div>' +
+    '<div class="grid-2"><div><label class="label">Jangka Waktu</label><select id="bt-period"><option value="1m">1 Bulan</option><option value="3m">3 Bulan</option><option value="6m">6 Bulan</option><option value="1y" selected>1 Tahun</option><option value="2y">2 Tahun</option></select></div>' +
+    '<div></div></div>' +
     '<button class="btn btn-primary" onclick="runBacktest()">▶ Jalankan Backtest</button></div>' +
     '<div id="backtest-result"></div>' +
     '<div class="card"><h3>📜 Riwayat</h3><div id="bt-history"><p class="hint">Pilih strategi lalu jalankan, atau lihat riwayat.</p></div></div>';
@@ -416,11 +418,12 @@ window.runBacktest = async function (presetId) {
   if (!ok) { showToast('Offline — backtest butuh backend', 'error'); return; }
   var pair = (document.getElementById('bt-pair') || {}).value || 'BTC/USDT';
   var tf = (document.getElementById('bt-tf') || {}).value || '1h';
+  var period = (document.getElementById('bt-period') || {}).value || '1y';
   showLoading();
   var resEl = document.getElementById('backtest-result');
   if (resEl) resEl.innerHTML = '<div class="card"><h3>⏳ Backtest berjalan...</h3><p>Fetching data + simulasi. Biasanya 10-30 detik.</p><div id="bt-progress" class="hint">Memulai...</div></div>';
   try {
-    var start = await api('/api/v1/backtest/run', 'POST', { strategy_id: sid, pair: pair, timeframe: tf });
+    var start = await api('/api/v1/backtest/run', 'POST', { strategy_id: sid, pair: pair, timeframe: tf, period: period });
     var bid = start.backtest_id;
     var res = null;
     for (var i = 0; i < 60; i++) {
@@ -468,6 +471,7 @@ function showBacktestData(res) {
   var commission = res.total_commission || 0;
   var h = '<div class="card good"><h3>📊 Hasil Backtest</h3>' +
     '<div class="kv"><span>Direction</span><b>' + dirLabel + '</b></div>' +
+    '<div class="kv"><span>Periode</span><b>' + esc(res.start_date || '?') + ' → ' + esc(res.end_date || '?') + '</b></div>' +
     '<div class="grid-2">' +
     '<div class="stat"><b>' + res.total_trades + '</b><span>Trades</span></div>' +
     '<div class="stat"><b>' + wr.toFixed(1) + '%</b><span>Win rate</span></div>' +
