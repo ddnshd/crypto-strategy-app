@@ -565,15 +565,20 @@ async function loadSettings() {
   var el = document.getElementById('tab-settings');
   el.innerHTML = '<div class="card"><h3>⏳ Memuat pengaturan AI...</h3></div>';
   var cfg = null;
-  var ok = await checkConnection();
-  if (ok) {
-    try {
-      cfg = await api('/api/v1/settings/ai');
-      saveCache('cs_ai_settings', cfg);
-    } catch (e) { cfg = loadCache('cs_ai_settings', null); showToast('Gagal load: ' + e.message, 'error'); }
-  } else {
-    cfg = loadCache('cs_ai_settings', null);
+  var ok = ONLINE || await checkConnection();
+  if (!ok) {
+    for (var i = 0; i < apiCandidates().length && !ok; i++) {
+      try {
+        var base = apiCandidates()[i];
+        var r = await fetchTimeout(base + '/api/v1/settings/ai', { method: 'GET', headers: { 'Content-Type': 'application/json' } }, 5000);
+        if (r.ok) { cfg = await r.json(); API_BASE = base; ok = true; saveCache('cs_ai_settings', cfg); LAST_ERROR = ''; }
+      } catch (e) { LAST_ERROR = (e.name === 'AbortError' ? 'timeout' : e.message) + ' @ ' + apiCandidates()[i]; }
+    }
   }
+  if (!cfg && ok) {
+    try { cfg = await api('/api/v1/settings/ai'); saveCache('cs_ai_settings', cfg); } catch (e) { cfg = loadCache('cs_ai_settings', null); }
+  }
+  if (!cfg) cfg = loadCache('cs_ai_settings', null);
   if (!cfg) {
     el.innerHTML = backendCardHTML(true) + diagCardHTML() +
       '<div class="empty-state"><div class="icon">⚙️</div><p>Backend offline dan belum ada cache.<br>Nyalakan backend untuk mengatur AI.</p></div>';
@@ -588,7 +593,8 @@ async function loadSettings() {
     '<div class="kv"><span>Error terakhir</span><b>' + esc(LAST_ERROR || '-') + '</b></div>' +
     '<div class="kv"><span>URL dicoba</span><b>' + esc(TRIED_URLS.join(', ') || '-') + '</b></div>' +
     '<div class="kv"><span>API key</span><b>' + esc(cfg.api_key || '-') + '</b></div>' +
-    '<div class="btn-row"><button class="btn btn-secondary" onclick="copyDiag()">📋 Salin diagnostik</button></div></div>' +
+    '<div class="btn-row"><button class="btn btn-secondary" onclick="copyDiag()">📋 Salin diagnostik</button>' +
+    '<button class="btn btn-secondary" onclick="forceRefreshSettings()">🔄 Muat ulang dari backend</button></div></div>' +
     '<div class="card"><h3>🔌 Koneksi</h3>' +
     '<label class="label">Base URL</label>' +
     '<input class="input" id="ai-base-url" value="' + esc(cfg.base_url || '') + '" placeholder="https://.../v1" inputmode="url">' +
@@ -610,9 +616,19 @@ async function loadSettings() {
     '<input class="input" id="ai-temp-exp" type="number" min="0" max="2" step="0.1" value="' + esc(cfg.temperature_explain != null ? cfg.temperature_explain : 0.5) + '">' +
     '<label class="label">Chat</label>' +
     '<input class="input" id="ai-temp-chat" type="number" min="0" max="2" step="0.1" value="' + esc(cfg.temperature_chat != null ? cfg.temperature_chat : 0.7) + '">' +
-    '<button class="btn btn-primary" onclick="saveAISettings()">💾 Simpan temperatur</button></div>';
+    '<button class="btn btn-primary" onclick="saveAISettings()">💾 Simpan temperatur</button></div>' +
+    '<div class="card"><h3>🔍 Debug (raw response)</h3><pre class="json" style="font-size:11px;max-height:200px;overflow:auto">' +
+    esc(JSON.stringify(cfg, null, 2)) + '</pre></div>';
 }
 window.loadSettings = loadSettings;
+
+window.forceRefreshSettings = async function () {
+  localStorage.removeItem('cs_ai_settings');
+  ONLINE = false;
+  showToast('Cache dibersihkan, mencoba koneksi ulang...', '');
+  await detectApi();
+  await loadSettings();
+};
 
 function diagCardHTML() {
   return '<div class="card"><h3>🩺 Diagnostik koneksi</h3>' +
