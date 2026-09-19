@@ -44,5 +44,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: crypto-web-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: apps/web-apk/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
