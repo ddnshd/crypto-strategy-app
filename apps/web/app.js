@@ -605,21 +605,16 @@ window.tryStartBackend = async function (action) {
   showToast('Mengirim perintah ' + action + ' ke Termux...', '');
   var res = 'error';
   try { res = window.AndroidBackend.startBackend(action); } catch (e) { res = 'error: ' + e; }
-  if (String(res).indexOf('ok') !== 0) {
-    var m = document.getElementById('backend-manual'); if (m) m.classList.remove('hidden');
-    showToast('Otomatis gagal — gunakan cara manual', 'error');
-    return;
-  }
+  showToast('Termux dibuka. Paste perintah di Termux.', 'success');
   for (var i = 0; i < 10; i++) {
-    await new Promise(function (r) { setTimeout(r, 2000); });
+    await new Promise(function (r) { setTimeout(r, 3000); });
     if (await checkConnection()) {
       showToast('Backend online! 🎉', 'success');
       await loadTab(state.activeTab || 'home');
       return;
     }
   }
-  var m2 = document.getElementById('backend-manual'); if (m2) m2.classList.remove('hidden');
-  showToast('Backend belum online — coba manual', 'error');
+  showToast('Backend belum online — jalankan manual di Termux', 'error');
 };
 window.retryConnection = async function () {
   showLoading();
@@ -631,6 +626,9 @@ window.retryConnection = async function () {
 };
 window.copyBackendCmd = function () {
   var t = backendCmdText();
+  if (hasBridge()) {
+    try { window.AndroidBackend.copyCommand(t); showToast('Command copied!', 'success'); return; } catch (e) {}
+  }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(t).then(
       function () { showToast('Perintah disalin!', 'success'); },
