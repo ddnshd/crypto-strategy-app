@@ -21,96 +21,108 @@ def compute_indicators(df: pd.DataFrame, conditions: list[dict]) -> pd.DataFrame
     for cond in conditions:
         indicator = cond.get("indicator", "").upper()
         params = cond.get("params", {})
+        compare_to = cond.get("compare_to")
 
-        try:
-            if indicator == "RSI":
-                period = params.get("period", 14)
-                col = f"RSI_{period}"
-                if col not in df.columns:
-                    df[col] = ta.momentum.RSIIndicator(close, window=period).rsi()
+        # Also compute compare_to indicator if present
+        if compare_to:
+            _compute_single(df, compare_to.upper(), {}, close, high, low, volume)
 
-            elif indicator == "EMA":
-                period = params.get("period", 20)
-                col = f"EMA_{period}"
-                if col not in df.columns:
-                    df[col] = ta.trend.EMAIndicator(close, window=period).ema_indicator()
+        _compute_single(df, indicator, params, close, high, low, volume)
 
-            elif indicator == "SMA":
-                period = params.get("period", 20)
-                col = f"SMA_{period}"
-                if col not in df.columns:
-                    df[col] = ta.trend.SMAIndicator(close, window=period).sma_indicator()
+    return df
 
-            elif indicator == "EMA_CROSS":
-                fast = params.get("fast", 9)
-                slow = params.get("slow", 21)
-                fast_col = f"EMA_{fast}"
-                slow_col = f"EMA_{slow}"
-                if fast_col not in df.columns:
-                    df[fast_col] = ta.trend.EMAIndicator(close, window=fast).ema_indicator()
-                if slow_col not in df.columns:
-                    df[slow_col] = ta.trend.EMAIndicator(close, window=slow).ema_indicator()
 
-            elif indicator == "SMA_CROSS":
-                fast = params.get("fast", 9)
-                slow = params.get("slow", 21)
-                fast_col = f"SMA_{fast}"
-                slow_col = f"SMA_{slow}"
-                if fast_col not in df.columns:
-                    df[fast_col] = ta.trend.SMAIndicator(close, window=fast).sma_indicator()
-                if slow_col not in df.columns:
-                    df[slow_col] = ta.trend.SMAIndicator(close, window=slow).sma_indicator()
+def _compute_single(df, indicator, params, close, high, low, volume):
+    """Compute a single indicator and add to df."""
+    try:
+        if indicator == "RSI":
+            period = params.get("period", 14)
+            col = f"RSI_{period}"
+            if col not in df.columns:
+                df[col] = ta.momentum.RSIIndicator(close, window=period).rsi()
 
-            elif indicator == "MACD":
-                fast = params.get("fast", 12)
-                slow = params.get("slow", 26)
-                signal = params.get("signal", 9)
-                macd = ta.trend.MACD(close, window_slow=slow, window_fast=fast, window_sign=signal)
-                if "MACD_line" not in df.columns:
-                    df["MACD_line"] = macd.macd()
-                if "MACD_signal" not in df.columns:
-                    df["MACD_signal"] = macd.macd_signal()
-                if "MACD_hist" not in df.columns:
-                    df["MACD_hist"] = macd.macd_diff()
+        elif indicator == "EMA":
+            period = params.get("period", 20)
+            col = f"EMA_{period}"
+            if col not in df.columns:
+                df[col] = ta.trend.EMAIndicator(close, window=period).ema_indicator()
 
-            elif indicator == "BBANDS":
-                period = params.get("period", 20)
-                std = params.get("std", 2)
-                bb = ta.volatility.BollingerBands(close, window=period, window_dev=std)
-                if f"BB_upper_{period}" not in df.columns:
-                    df[f"BB_upper_{period}"] = bb.bollinger_hband()
-                    df[f"BB_lower_{period}"] = bb.bollinger_lband()
-                    df[f"BB_mid_{period}"] = bb.bollinger_mavg()
-                    df[f"BB_width_{period}"] = bb.bollinger_wband()
+        elif indicator == "SMA":
+            period = params.get("period", 20)
+            col = f"SMA_{period}"
+            if col not in df.columns:
+                df[col] = ta.trend.SMAIndicator(close, window=period).sma_indicator()
 
-            elif indicator == "ATR":
-                period = params.get("period", 14)
-                col = f"ATR_{period}"
-                if col not in df.columns:
-                    df[col] = ta.volatility.AverageTrueRange(high, low, close, window=period).average_true_range()
+        elif indicator == "EMA_CROSS":
+            fast = params.get("fast", 9)
+            slow = params.get("slow", 21)
+            fast_col = f"EMA_{fast}"
+            slow_col = f"EMA_{slow}"
+            if fast_col not in df.columns:
+                df[fast_col] = ta.trend.EMAIndicator(close, window=fast).ema_indicator()
+            if slow_col not in df.columns:
+                df[slow_col] = ta.trend.EMAIndicator(close, window=slow).ema_indicator()
 
-            elif indicator == "STOCH":
-                k_period = params.get("k", 14)
-                d_period = params.get("d", 3)
-                stoch = ta.momentum.StochasticOscillator(high, low, close, window=k_period, smooth_window=d_period)
-                if "STOCH_k" not in df.columns:
-                    df["STOCH_k"] = stoch.stoch()
-                    df["STOCH_d"] = stoch.stoch_signal()
+        elif indicator == "SMA_CROSS":
+            fast = params.get("fast", 9)
+            slow = params.get("slow", 21)
+            fast_col = f"SMA_{fast}"
+            slow_col = f"SMA_{slow}"
+            if fast_col not in df.columns:
+                df[fast_col] = ta.trend.SMAIndicator(close, window=fast).sma_indicator()
+            if slow_col not in df.columns:
+                df[slow_col] = ta.trend.SMAIndicator(close, window=slow).sma_indicator()
 
-            elif indicator == "VOLUME_SMA":
-                period = params.get("period", 20)
-                col = f"VOLUME_SMA_{period}"
-                if col not in df.columns:
-                    df[col] = volume.rolling(window=period).mean()
+        elif indicator == "MACD":
+            fast = params.get("fast", 12)
+            slow = params.get("slow", 26)
+            signal = params.get("signal", 9)
+            macd = ta.trend.MACD(close, window_slow=slow, window_fast=fast, window_sign=signal)
+            if "MACD_line" not in df.columns:
+                df["MACD_line"] = macd.macd()
+            if "MACD_signal" not in df.columns:
+                df["MACD_signal"] = macd.macd_signal()
+            if "MACD_hist" not in df.columns:
+                df["MACD_hist"] = macd.macd_diff()
 
-            elif indicator in ("PRICE", "CLOSE"):
-                pass  # use df["close"] directly
+        elif indicator == "BBANDS":
+            period = params.get("period", 20)
+            std = params.get("std", 2)
+            bb = ta.volatility.BollingerBands(close, window=period, window_dev=std)
+            if f"BB_upper_{period}" not in df.columns:
+                df[f"BB_upper_{period}"] = bb.bollinger_hband()
+                df[f"BB_lower_{period}"] = bb.bollinger_lband()
+                df[f"BB_mid_{period}"] = bb.bollinger_mavg()
+                df[f"BB_width_{period}"] = bb.bollinger_wband()
 
-            elif indicator == "VOLUME":
-                pass  # use df["volume"] directly
+        elif indicator == "ATR":
+            period = params.get("period", 14)
+            col = f"ATR_{period}"
+            if col not in df.columns:
+                df[col] = ta.volatility.AverageTrueRange(high, low, close, window=period).average_true_range()
 
-        except Exception as e:
-            logger.warning(f"Failed to compute indicator {indicator}: {e}")
+        elif indicator == "STOCH":
+            k_period = params.get("k", 14)
+            d_period = params.get("d", 3)
+            stoch = ta.momentum.StochasticOscillator(high, low, close, window=k_period, smooth_window=d_period)
+            if "STOCH_k" not in df.columns:
+                df["STOCH_k"] = stoch.stoch()
+                df["STOCH_d"] = stoch.stoch_signal()
+
+        elif indicator == "VOLUME_SMA":
+            period = params.get("period", 20)
+            col = f"VOLUME_SMA_{period}"
+            if col not in df.columns:
+                df[col] = volume.rolling(window=period).mean()
+
+        elif indicator in ("PRICE", "CLOSE"):
+            pass  # use df["close"] directly
+
+        elif indicator == "VOLUME":
+            pass  # use df["volume"] directly
+
+    except Exception as e:
+        logger.warning(f"Failed to compute indicator {indicator}: {e}")
 
     return df
 
@@ -137,7 +149,25 @@ def evaluate_condition(df: pd.DataFrame, cond: dict) -> pd.Series:
         rhs = value
 
     # Evaluate operator
-    if operator == "<":
+    if operator in ("cross_above", "cross_below"):
+        # For cross operators: default rhs to 0 if None (for EMA_CROSS etc.)
+        if rhs is None:
+            rhs_series = pd.Series(0.0, index=df.index)
+        elif isinstance(rhs, (int, float)):
+            rhs_series = pd.Series(rhs, index=df.index)
+        elif isinstance(rhs, pd.Series):
+            rhs_series = rhs
+        else:
+            rhs_series = pd.Series(0.0, index=df.index)
+        if operator == "cross_above":
+            prev_below = lhs.shift(1) <= rhs_series.shift(1)
+            curr_above = lhs > rhs_series
+            return prev_below & curr_above
+        else:
+            prev_above = lhs.shift(1) >= rhs_series.shift(1)
+            curr_below = lhs < rhs_series
+            return prev_above & curr_below
+    elif operator == "<":
         return lhs < rhs
     elif operator == ">":
         return lhs > rhs
@@ -147,23 +177,6 @@ def evaluate_condition(df: pd.DataFrame, cond: dict) -> pd.Series:
         return lhs >= rhs
     elif operator == "==":
         return lhs == rhs
-    elif operator == "cross_above":
-        # lhs crosses above rhs
-        if isinstance(rhs, (int, float)):
-            rhs_series = pd.Series(rhs, index=df.index)
-        else:
-            rhs_series = rhs
-        prev_below = lhs.shift(1) <= rhs_series.shift(1)
-        curr_above = lhs > rhs_series
-        return prev_below & curr_above
-    elif operator == "cross_below":
-        if isinstance(rhs, (int, float)):
-            rhs_series = pd.Series(rhs, index=df.index)
-        else:
-            rhs_series = rhs
-        prev_above = lhs.shift(1) >= rhs_series.shift(1)
-        curr_below = lhs < rhs_series
-        return prev_above & curr_below
     else:
         logger.warning(f"Unknown operator '{operator}', returning all False")
         return pd.Series(False, index=df.index)
