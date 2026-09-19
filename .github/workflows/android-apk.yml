@@ -49,8 +49,8 @@ jobs:
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
           unzip -q cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
           SDKMGR=$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/bin/sdkmanager
-          $SDKMGR --update 2>/dev/null || true
-          $SDKMGR "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" --licenses 2>/dev/null || true
+          yes | $SDKMGR --licenses 2>/dev/null || true
+          printf 'y\n' | $SDKMGR "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" 2>/dev/null || true
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
       - name: Generate debug keystore
         run: |
