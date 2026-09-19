@@ -71,6 +71,8 @@ class BacktestResult(Base):
     total_trades: Mapped[int] = mapped_column(Integer, nullable=False)
     winning_trades: Mapped[int] = mapped_column(Integer, nullable=False)
     losing_trades: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_commission: Mapped[float | None] = mapped_column(Float, nullable=True)  # total fees paid
+    direction: Mapped[str] = mapped_column(String(10), nullable=False, default="long")  # long/short
 
     # Score & qualification
     score: Mapped[float] = mapped_column(Float, nullable=False)  # 0-100

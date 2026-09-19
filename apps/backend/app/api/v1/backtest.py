@@ -70,6 +70,8 @@ async def _run_and_save_backtest(
                 total_trades=int(result["total_trades"]),
                 winning_trades=int(result["winning_trades"]),
                 losing_trades=int(result["losing_trades"]),
+                total_commission=float(result.get("total_commission", 0)),
+                direction=result.get("direction", "long"),
                 score=float(result["score"]),
                 is_qualified=bool(result["is_qualified"]),
                 equity_curve=_json_safe(result["equity_curve"]),
