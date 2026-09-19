@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0a0a2e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/style.css">
+<title>Crypto Strategy</title>
+</head>
+<body>
+<div id="app">
+  <header id="header">
+    <div class="header-content">
+      <h1>⚡ Crypto Strategy</h1>
+      <p class="subtitle">AI Strategy Builder & Signal Scanner</p>
+    </div>
+    <div id="connection-status" class="status-offline">● Offline</div>
+  </header>
+
+  <nav id="tab-nav">
+    <button class="tab active" data-tab="home">🏠 Home</button>
+    <button class="tab" data-tab="builder">🤖 Builder</button>
+    <button class="tab" data-tab="library">📚 Library</button>
+    <button class="tab" data-tab="backtest">📊 Backtest</button>
+    <button class="tab" data-tab="signals">🔔 Signals</button>
+  </nav>
+
+  <main id="main-content">
+    <section id="tab-home" class="tab-content active"></section>
+    <section id="tab-builder" class="tab-content"></section>
+    <section id="tab-library" class="tab-content"></section>
+    <section id="tab-backtest" class="tab-content"></section>
+    <section id="tab-signals" class="tab-content"></section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="loading" class="loading hidden">Loading...</div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+</script>
+</body>
+</html>

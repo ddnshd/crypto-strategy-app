@@ -15,8 +15,10 @@ public class MainActivity extends AppCompatActivity {
         settings.setDomStorageEnabled(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
         webView.setWebViewClient(new android.webkit.WebViewClient());
-        webView.loadUrl("http://10.0.2.2:8080");
+        webView.loadUrl("file:///android_asset/webapp/index.html");
     }
     @Override
     public void onBackPressed() {
