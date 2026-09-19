@@ -58,3 +58,30 @@ async def test_ai_settings():
     except Exception as e:
         logger.error(f"AI test failed: {e}")
         raise HTTPException(status_code=503, detail="AI tidak dapat dihubungi. Periksa base URL / API key / model.")
+
+
+@router.get("/ai/models")
+async def get_ai_models():
+    """Daftar model dari provider AI (via proxy agar API key tidak bocor ke frontend)."""
+    cfg = get_llm_config(include_secret=True)
+    base_url = cfg.get("base_url", "").rstrip("/")
+    api_key = cfg.get("api_key", "")
+    models_url = base_url + "/models"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(models_url, headers={"Authorization": f"Bearer {api_key}"})
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, list):
+                models = [{"id": m} if isinstance(m, str) else m for m in data]
+            elif isinstance(data, dict):
+                raw = data.get("data", data.get("models", []))
+                models = [{"id": m} if isinstance(m, str) else m for m in raw] if isinstance(raw, list) else []
+            else:
+                models = []
+            return {"models": models}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Provider returned HTTP {e.response.status_code}")
+    except Exception as e:
+        logger.error(f"Failed to fetch models: {e}")
+        raise HTTPException(status_code=502, detail="Gagal mengambil daftar model dari provider")

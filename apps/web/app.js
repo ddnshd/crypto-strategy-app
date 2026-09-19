@@ -601,8 +601,8 @@ async function loadSettings() {
     '<label class="label">API key baru (kosongkan = tidak diubah)</label>' +
     '<input class="input" id="ai-key" type="password" placeholder="••••" autocomplete="off">' +
     '<label class="label">Model</label>' +
-    '<input class="input" id="ai-model" list="ai-models" value="' + esc(cfg.model || '') + '">' +
-    '<datalist id="ai-models"><option value="ag/claude-sonnet-4-6"></option><option value="gpt-4o"></option><option value="gpt-4o-mini"></option></datalist>' +
+    '<input class="input" id="ai-model" list="ai-models" value="' + esc(cfg.model || '') + '" placeholder="Ketik atau pilih model...">' +
+    '<datalist id="ai-models"></datalist>' +
     '<label class="label">Max tokens (100–32000)</label>' +
     '<input class="input" id="ai-max" type="number" min="100" max="32000" step="100" value="' + esc(cfg.max_tokens != null ? cfg.max_tokens : 2000) + '">' +
     '<div class="btn-row"><button class="btn btn-primary" onclick="saveAISettings()">💾 Simpan</button>' +
@@ -619,6 +619,7 @@ async function loadSettings() {
     '<button class="btn btn-primary" onclick="saveAISettings()">💾 Simpan temperatur</button></div>' +
     '<div class="card"><h3>🔍 Debug (raw response)</h3><pre class="json" style="font-size:11px;max-height:200px;overflow:auto">' +
     esc(JSON.stringify(cfg, null, 2)) + '</pre></div>';
+  populateModelList();
 }
 window.loadSettings = loadSettings;
 
@@ -629,6 +630,32 @@ window.forceRefreshSettings = async function () {
   await detectApi();
   await loadSettings();
 };
+
+async function populateModelList() {
+  var dl = document.getElementById('ai-models');
+  if (!dl) return;
+  var defaults = ['ag/claude-sonnet-4-6', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku', 'gemini-1.5-pro', 'gemini-1.5-flash', 'llama-3.1-405b', 'llama-3.1-70b', 'deepseek-chat', 'deepseek-coder'];
+  defaults.forEach(function (m) { var o = document.createElement('option'); o.value = m; dl.appendChild(o); });
+  try {
+    var data = await api('/api/v1/settings/ai/models');
+    var models = data.models || [];
+    if (models.length) {
+      dl.innerHTML = '';
+      var seen = {};
+      models.forEach(function (m) {
+        var id = typeof m === 'string' ? m : (m.id || m.name || '');
+        if (id && !seen[id]) { seen[id] = 1; var o = document.createElement('option'); o.value = id; dl.appendChild(o); }
+      });
+      if (!dl.children.length) {
+        defaults.forEach(function (m) { var o = document.createElement('option'); o.value = m; dl.appendChild(o); });
+      }
+      showToast('Model dimuat: ' + dl.children.length + ' model', 'success');
+    }
+  } catch (e) {
+    showToast('Gagal load model, pakai default', 'error');
+  }
+}
+window.populateModelList = populateModelList;
 
 function diagCardHTML() {
   return '<div class="card"><h3>🩺 Diagnostik koneksi</h3>' +
