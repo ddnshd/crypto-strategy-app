@@ -231,7 +231,9 @@ class Backtester:
                     is_short = True
                     break
 
-        all_conditions = entry_conditions + (filters or []) + (exit_indicator_conds or [])
+        all_conditions = [c for c in entry_conditions if isinstance(c, dict)] + \
+                         [c for c in (filters or []) if isinstance(c, dict)] + \
+                         [c for c in (exit_indicator_conds or []) if isinstance(c, dict)]
         df = compute_indicators(df, all_conditions)
         df = df.dropna()
 
