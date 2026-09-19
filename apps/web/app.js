@@ -1,6 +1,8 @@
 /* Crypto Strategy Web App - fixed endpoints + offline-first */
 let API_BASE = localStorage.getItem('cs_api_base') || '';
 let ONLINE = false;
+let LAST_ERROR = '';
+let TRIED_URLS = [];
 let DEVICE_ID = localStorage.getItem('cs_device_id') || '';
 if (!DEVICE_ID) { DEVICE_ID = 'dev-' + Math.random().toString(36).slice(2, 10); localStorage.setItem('cs_device_id', DEVICE_ID); }
 const state = { strategies: [], signals: [], scanners: [], prices: {}, activeTab: 'home', lastAI: null };
@@ -41,11 +43,13 @@ async function fetchTimeout(url, opts, ms) {
 }
 async function detectApi() {
   var cands = apiCandidates();
+  TRIED_URLS = cands.slice();
   for (var i = 0; i < cands.length; i++) {
     try {
       var r = await fetchTimeout(cands[i] + '/health', {}, 4000);
-      if (r.ok) { API_BASE = cands[i]; localStorage.setItem('cs_api_base', API_BASE); return API_BASE; }
-    } catch (e) {}
+      if (r.ok) { API_BASE = cands[i]; localStorage.setItem('cs_api_base', API_BASE); LAST_ERROR = ''; return API_BASE; }
+      LAST_ERROR = 'HTTP ' + r.status + ' @ ' + cands[i];
+    } catch (e) { LAST_ERROR = (e.name === 'AbortError' ? 'timeout' : e.message) + ' @ ' + cands[i]; }
   }
   return API_BASE || cands[0];
 }
@@ -53,13 +57,20 @@ async function api(path, method, body) {
   method = method || 'GET';
   var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
-  var r = await fetchTimeout(API_BASE + path, opts, 15000);
+  var r;
+  try { r = await fetchTimeout(API_BASE + path, opts, 15000); }
+  catch (e) {
+    LAST_ERROR = (e.name === 'AbortError' ? 'timeout 15s' : e.message) + ' @ ' + API_BASE + path;
+    throw e;
+  }
   var txt = await r.text(), data = null;
   try { data = txt ? JSON.parse(txt) : null; } catch (e) { data = { raw: txt }; }
   if (!r.ok) {
     var msg = (data && data.detail) || ('HTTP ' + r.status);
+    LAST_ERROR = (typeof msg === 'string' ? msg : JSON.stringify(msg)) + ' @ ' + API_BASE + path;
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
   }
+  LAST_ERROR = '';
   return data;
 }
 function setConn(online) {
@@ -72,8 +83,9 @@ function setConn(online) {
 async function checkConnection() {
   try {
     var r = await fetchTimeout(API_BASE + '/health', {}, 5000);
-    if (r.ok) { setConn(true); return true; }
-  } catch (e) {}
+    if (r.ok) { setConn(true); LAST_ERROR = ''; return true; }
+    LAST_ERROR = 'HTTP ' + r.status + ' @ ' + API_BASE + '/health';
+  } catch (e) { LAST_ERROR = (e.name === 'AbortError' ? 'timeout' : e.message) + ' @ ' + API_BASE + '/health'; }
   setConn(false); return false;
 }
 function demoStrategies() {
@@ -482,6 +494,7 @@ function backendCardHTML(withRestart) {
   var cmd = esc(backendCmdText());
   var h = '<div class="card warn"><h3>🔴 Backend mati</h3>' +
     '<p>Tidak bisa menghubungi <b>' + esc(API_BASE || 'backend') + '</b>. Nyalakan backend lalu coba lagi.</p>' +
+    (LAST_ERROR ? '<p class="hint">Error: ' + esc(LAST_ERROR) + '</p>' : '') +
     '<div class="btn-row">' +
     (hasBridge()
       ? '<button class="btn btn-primary" onclick="tryStartBackend(\'start\')">▶ Nyalakan Backend</button>'
@@ -562,7 +575,8 @@ async function loadSettings() {
     cfg = loadCache('cs_ai_settings', null);
   }
   if (!cfg) {
-    el.innerHTML = '<div class="empty-state"><div class="icon">⚙️</div><p>Backend offline dan belum ada cache.<br>Nyalakan backend untuk mengatur AI.</p></div>';
+    el.innerHTML = backendCardHTML(true) + diagCardHTML() +
+      '<div class="empty-state"><div class="icon">⚙️</div><p>Backend offline dan belum ada cache.<br>Nyalakan backend untuk mengatur AI.</p></div>';
     return;
   }
   el.innerHTML =
@@ -570,7 +584,11 @@ async function loadSettings() {
     '<div class="card accent"><h3>⚙️ Pengaturan AI</h3>' +
     '<p>Endpoint OpenAI-compatible + model + temperatur. API key tidak pernah ditampilkan penuh.</p>' +
     '<div class="kv"><span>Status</span><b>' + (ONLINE ? '<span class="text-green">● Online</span>' : '<span class="text-red">● Offline (cache)</span>') + '</b></div>' +
-    '<div class="kv"><span>API key</span><b>' + esc(cfg.api_key || '-') + '</b></div></div>' +
+    '<div class="kv"><span>API base dipakai</span><b>' + esc(API_BASE || '-') + '</b></div>' +
+    '<div class="kv"><span>Error terakhir</span><b>' + esc(LAST_ERROR || '-') + '</b></div>' +
+    '<div class="kv"><span>URL dicoba</span><b>' + esc(TRIED_URLS.join(', ') || '-') + '</b></div>' +
+    '<div class="kv"><span>API key</span><b>' + esc(cfg.api_key || '-') + '</b></div>' +
+    '<div class="btn-row"><button class="btn btn-secondary" onclick="copyDiag()">📋 Salin diagnostik</button></div></div>' +
     '<div class="card"><h3>🔌 Koneksi</h3>' +
     '<label class="label">Base URL</label>' +
     '<input class="input" id="ai-base-url" value="' + esc(cfg.base_url || '') + '" placeholder="https://.../v1" inputmode="url">' +
@@ -595,6 +613,24 @@ async function loadSettings() {
     '<button class="btn btn-primary" onclick="saveAISettings()">💾 Simpan temperatur</button></div>';
 }
 window.loadSettings = loadSettings;
+
+function diagCardHTML() {
+  return '<div class="card"><h3>🩺 Diagnostik koneksi</h3>' +
+    '<div class="kv"><span>API base</span><b>' + esc(API_BASE || '-') + '</b></div>' +
+    '<div class="kv"><span>Error terakhir</span><b>' + esc(LAST_ERROR || '-') + '</b></div>' +
+    '<div class="kv"><span>URL dicoba</span><b>' + esc(TRIED_URLS.join(', ') || '-') + '</b></div>' +
+    '<div class="btn-row"><button class="btn btn-secondary" onclick="copyDiag()">📋 Salin diagnostik</button>' +
+    '<button class="btn btn-secondary" onclick="retryConnection()">🔄 Coba lagi</button></div></div>';
+}
+window.copyDiag = function () {
+  var t = JSON.stringify({ api_base: API_BASE, online: ONLINE, last_error: LAST_ERROR, tried: TRIED_URLS, device: DEVICE_ID }, null, 2);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(
+      function () { showToast('Diagnostik disalin!', 'success'); },
+      function () { prompt('Salin info ini:', t); }
+    );
+  } else { prompt('Salin info ini:', t); }
+};
 
 window.saveAISettings = async function () {
   if (!ONLINE && !(await checkConnection())) { showToast('Offline — butuh backend online', 'error'); return; }
