@@ -17,6 +17,11 @@ public class MainActivity extends AppCompatActivity {
         settings.setUseWideViewPort(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
+        // Wajib: halaman file:///android_asset/... perlu akses fetch/XHR ke backend http://127.0.0.1:8001
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
+        settings.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setMediaPlaybackRequiresUserGesture(false);
         webView.setWebViewClient(new android.webkit.WebViewClient());
         webView.loadUrl("file:///android_asset/webapp/index.html");
     }
