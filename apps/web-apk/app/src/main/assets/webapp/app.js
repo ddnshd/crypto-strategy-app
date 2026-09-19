@@ -162,6 +162,7 @@ async function loadHome() {
     ? Object.keys(prices).map(function (k) { return '<div class="stat"><b>$' + Number(prices[k]).toLocaleString() + '</b><span>' + esc(k) + '</span></div>'; }).join('')
     : '<div class="stat"><b>-</b><span>Harga live perlu backend</span></div>';
   el.innerHTML =
+    (!ok ? backendCardHTML(false) : '') +
     '<div class="card hero"><h3>⚡ Selamat datang</h3>' +
     '<div class="big">' + strats.length + ' strategi</div>' +
     '<p>Device: ' + esc(DEVICE_ID) + ' • Backend: ' + esc(API_BASE || 'belum ketemu') + '</p>' +
@@ -469,11 +470,90 @@ async function loadSignals() {
 }
 window.loadSignals = loadSignals;
 
+function hasBridge() {
+  try { return typeof window.AndroidBackend !== 'undefined' && window.AndroidBackend !== null; }
+  catch (e) { return false; }
+}
+function backendCmdText() {
+  try { if (hasBridge()) return window.AndroidBackend.backendCommand(); } catch (e) {}
+  return 'bash ~/crypto-strategy-app/apps/backend/server.sh start';
+}
+function backendCardHTML(withRestart) {
+  var cmd = esc(backendCmdText());
+  var h = '<div class="card warn"><h3>🔴 Backend mati</h3>' +
+    '<p>Tidak bisa menghubungi <b>' + esc(API_BASE || 'backend') + '</b>. Nyalakan backend lalu coba lagi.</p>' +
+    '<div class="btn-row">' +
+    (hasBridge()
+      ? '<button class="btn btn-primary" onclick="tryStartBackend(\'start\')">▶ Nyalakan Backend</button>'
+      : '<button class="btn btn-primary" onclick="copyBackendCmd()">📋 Salin perintah</button>') +
+    '<button class="btn btn-secondary" onclick="retryConnection()">🔄 Coba lagi</button></div>';
+  if (withRestart && hasBridge()) {
+    h += '<div class="btn-row"><button class="btn btn-secondary" onclick="tryStartBackend(\'restart\')">↻ Restart Backend</button>' +
+      '<button class="btn btn-secondary" onclick="openTermuxApp()">📱 Buka Termux</button></div>';
+  }
+  if (!hasBridge()) {
+    h += '<pre class="json">' + cmd + '</pre><p class="hint">Jalankan perintah di atas di Termux, lalu tekan Coba lagi.</p>';
+  } else {
+    h += '<div id="backend-manual" class="hidden"><pre class="json">' + cmd + '</pre>' +
+      '<div class="btn-row"><button class="btn btn-secondary" onclick="openTermuxApp()">📱 Buka Termux</button>' +
+      '<button class="btn btn-secondary" onclick="copyBackendCmd()">📋 Salin</button></div>' +
+      '<p class="hint">Kalau otomatis gagal, jalankan manual di Termux.</p></div>';
+  }
+  return h + '</div>';
+}
+window.tryStartBackend = async function (action) {
+  action = action === 'restart' ? 'restart' : 'start';
+  if (!hasBridge()) { copyBackendCmd(); return; }
+  var termux = false;
+  try { termux = window.AndroidBackend.isTermuxInstalled(); } catch (e) {}
+  if (!termux) { showToast('Aplikasi Termux tidak ditemukan', 'error'); return; }
+  showToast('Mengirim perintah ' + action + ' ke Termux...', '');
+  var res = 'error';
+  try { res = window.AndroidBackend.startBackend(action); } catch (e) { res = 'error: ' + e; }
+  if (String(res).indexOf('ok') !== 0) {
+    var m = document.getElementById('backend-manual'); if (m) m.classList.remove('hidden');
+    showToast('Otomatis gagal — gunakan cara manual', 'error');
+    return;
+  }
+  for (var i = 0; i < 10; i++) {
+    await new Promise(function (r) { setTimeout(r, 2000); });
+    if (await checkConnection()) {
+      showToast('Backend online! 🎉', 'success');
+      await loadTab(state.activeTab || 'home');
+      return;
+    }
+  }
+  var m2 = document.getElementById('backend-manual'); if (m2) m2.classList.remove('hidden');
+  showToast('Backend belum online — coba manual', 'error');
+};
+window.retryConnection = async function () {
+  showLoading();
+  await detectApi();
+  var ok = await checkConnection();
+  hideLoading();
+  if (ok) { showToast('Terhubung!', 'success'); await loadTab(state.activeTab || 'home'); }
+  else showToast('Masih offline', 'error');
+};
+window.copyBackendCmd = function () {
+  var t = backendCmdText();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(
+      function () { showToast('Perintah disalin!', 'success'); },
+      function () { prompt('Salin perintah ini:', t); }
+    );
+  } else { prompt('Salin perintah ini:', t); }
+};
+window.openTermuxApp = function () {
+  try { if (hasBridge() && window.AndroidBackend.openTermux()) return; } catch (e) {}
+  showToast('Termux tidak ditemukan', 'error');
+};
+
 async function loadSettings() {
   var el = document.getElementById('tab-settings');
   el.innerHTML = '<div class="card"><h3>⏳ Memuat pengaturan AI...</h3></div>';
   var cfg = null;
-  if (await checkConnection()) {
+  var ok = await checkConnection();
+  if (ok) {
     try {
       cfg = await api('/api/v1/settings/ai');
       saveCache('cs_ai_settings', cfg);
@@ -486,6 +566,7 @@ async function loadSettings() {
     return;
   }
   el.innerHTML =
+    (!ok ? backendCardHTML(true) : '') +
     '<div class="card accent"><h3>⚙️ Pengaturan AI</h3>' +
     '<p>Endpoint OpenAI-compatible + model + temperatur. API key tidak pernah ditampilkan penuh.</p>' +
     '<div class="kv"><span>Status</span><b>' + (ONLINE ? '<span class="text-green">● Online</span>' : '<span class="text-red">● Offline (cache)</span>') + '</b></div>' +
