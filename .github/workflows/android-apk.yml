@@ -12,8 +12,8 @@ jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
     env:
-      ANDROID_SDK_ROOT: $HOME/android-sdk
-      ANDROID_HOME: $HOME/android-sdk
+      ANDROID_SDK_ROOT: /home/runner/android-sdk
+      ANDROID_HOME: /home/runner/android-sdk
     defaults:
       run:
         working-directory: apps/mobile
@@ -41,8 +41,6 @@ jobs:
         run: chmod +x android/gradlew
 
       - name: Setup Android SDK
-        env:
-          ANDROID_SDK_ROOT: $HOME/android-sdk
         run: |
           mkdir -p $ANDROID_SDK_ROOT
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
