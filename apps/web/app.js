@@ -327,12 +327,19 @@ window.showDetail = async function (id) {
       '<p>' + esc(d.description || '-') + '</p>' +
       '<div class="kv"><span>Pair</span><b>' + esc(d.pair) + '</b></div>' +
       '<div class="kv"><span>Timeframe</span><b>' + esc(d.timeframe) + '</b></div>' +
-      '<div class="kv"><span>Style</span><b>' + esc(d.style) + '</b></div>' +
-      '<div class="kv"><span>Status</span><b>' + (d.is_backtested ? '✅ backtested' : '⬜ belum backtest') + ' • skor ' + (sc == null ? '-' : Number(sc).toFixed(1)) + '</b></div>' +
+      '<div class="kv"><span>Style</span><b>' + esc(d.style) + '</b></div>';
+    var activeScanner = (state.scanners || []).find(function (sc) { return sc.strategy_id === d.id && sc.is_active; });
+    if (activeScanner) {
+      el.innerHTML += '<div class="kv"><span>Scanner</span><b style="color:#22dd88;">● AKTIF (background scan)</b></div>';
+    }
+    el.innerHTML += '<div class="kv"><span>Status</span><b>' + (d.is_backtested ? '✅ backtested' : '⬜ belum backtest') + ' • skor ' + (sc == null ? '-' : Number(sc).toFixed(1)) + '</b></div>' +
       '<div class="score-bar"><div class="score-bar-fill" style="width:' + (sc || 0) + '%;background:' + color + '"></div></div>' +
       '<pre class="json">' + esc(JSON.stringify(d.definition || {}, null, 2)) + '</pre>' +
       '<div class="btn-row"><button class="btn btn-primary" onclick="goBacktest(\'' + d.id + '\')">📊 Backtest</button>' +
-      '<button class="btn btn-secondary" onclick="activateScanner(\'' + d.id + '\')">📡 Scanner</button></div>' +
+      (activeScanner
+        ? '<button class="btn btn-danger" onclick="deactivateScanner(\'' + activeScanner.id + '\', \'' + d.id + '\')">⏹ Stop Scanner</button>'
+        : '<button class="btn btn-secondary" onclick="activateScanner(\'' + d.id + '\')">📡 Aktifkan Scanner</button>') +
+      '</div>' +
       '<div class="btn-row"><button class="btn btn-secondary" onclick="duplicateStrategy(\'' + d.id + '\')">⧉ Duplikat</button>' +
       '<button class="btn btn-danger" onclick="deleteStrategy(\'' + d.id + '\')">🗑 Hapus</button></div>' +
       (vers && vers.length ? '<p class="hint mt-1">Versi: ' + vers.map(function (v) { return 'v' + v.version; }).join(', ') + '</p>' : '') +
@@ -360,6 +367,25 @@ window.activateScanner = async function (id) {
   try {
     await api('/api/v1/scanners/activate', 'POST', { strategy_id: id, device_id: DEVICE_ID });
     showToast('Scanner aktif!', 'success');
+    try {
+      var sc = await api('/api/v1/scanners?device_id=' + encodeURIComponent(DEVICE_ID));
+      state.scanners = Array.isArray(sc) ? sc : [];
+    } catch (e) {}
+    showStrategy(id);
+  } catch (e) { showToast('Gagal: ' + e.message, 'error'); }
+  hideLoading();
+};
+window.deactivateScanner = async function (scannerId, stratId) {
+  showLoading();
+  try {
+    await api('/api/v1/scanners/' + scannerId, 'DELETE');
+    showToast('Scanner dinonaktifkan', 'info');
+    try {
+      var sc = await api('/api/v1/scanners?device_id=' + encodeURIComponent(DEVICE_ID));
+      state.scanners = Array.isArray(sc) ? sc : [];
+    } catch (e) {}
+    if (stratId) showStrategy(stratId);
+    else loadSignals();
   } catch (e) { showToast('Gagal: ' + e.message, 'error'); }
   hideLoading();
 };
@@ -383,7 +409,7 @@ async function loadBacktest() {
     '<div class="grid-2"><div><label class="label">Pair</label><select id="bt-pair"><option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option></select></div>' +
     '<div><label class="label">Timeframe</label><select id="bt-tf"><option value="15m">15m</option><option value="1h" selected>1h</option><option value="4h">4h</option><option value="1d">1d</option></select></div></div>' +
     '<div class="grid-2"><div><label class="label">Jangka Waktu</label><select id="bt-period"><option value="1m">1 Bulan</option><option value="3m">3 Bulan</option><option value="6m">6 Bulan</option><option value="1y" selected>1 Tahun</option><option value="2y">2 Tahun</option></select></div>' +
-    '<div></div></div>' +
+    '<div><label class="label">Alokasi Modal / Trade</label><select id="bt-pos"><option value="100" selected>100% (All-In / Spot)</option><option value="50">50% Modal</option><option value="25">25% Modal</option><option value="10">10% Modal</option><option value="0">Bawaan Strategi</option></select></div></div>' +
     '<button class="btn btn-primary" onclick="runBacktest()">▶ Jalankan Backtest</button></div>' +
     '<div id="backtest-result"></div>' +
     '<div class="card"><h3>📜 Riwayat</h3><div id="bt-history"><p class="hint">Pilih strategi lalu jalankan, atau lihat riwayat.</p></div></div>';
@@ -420,11 +446,14 @@ window.runBacktest = async function (presetId) {
   var pair = (document.getElementById('bt-pair') || {}).value || 'BTC/USDT';
   var tf = (document.getElementById('bt-tf') || {}).value || '1h';
   var period = (document.getElementById('bt-period') || {}).value || '1y';
+  var posVal = parseFloat((document.getElementById('bt-pos') || {}).value || '100');
   showLoading();
   var resEl = document.getElementById('backtest-result');
   if (resEl) resEl.innerHTML = '<div class="card"><h3>⏳ Backtest berjalan...</h3><p>Fetching data + simulasi. Biasanya 10-30 detik.</p><div id="bt-progress" class="hint">Memulai...</div></div>';
   try {
-    var start = await api('/api/v1/backtest/run', 'POST', { strategy_id: sid, pair: pair, timeframe: tf, period: period });
+    var payload = { strategy_id: sid, pair: pair, timeframe: tf, period: period };
+    if (posVal > 0) payload.position_size_pct = posVal;
+    var start = await api('/api/v1/backtest/run', 'POST', payload);
     var bid = start.backtest_id;
     var res = null;
     for (var i = 0; i < 60; i++) {
@@ -515,6 +544,37 @@ function showBacktestData(res) {
     }
     h += '</div>';
   }
+  if (res.trade_log && res.trade_log.length) {
+    var trades = res.trade_log;
+    h += '<div class="card"><h3>📜 Riwayat Transaksi (' + trades.length + ' Trade)</h3>' +
+      '<details><summary class="hint mb-1">Buka / tutup tabel rincian transaksi</summary>' +
+      '<div style="overflow-x:auto;max-height:360px;overflow-y:auto;">' +
+      '<table style="width:100%;font-size:12px;border-collapse:collapse;text-align:left;">' +
+      '<thead><tr style="border-bottom:1px solid rgba(255,255,255,0.15);color:#8b8baa;">' +
+      '<th style="padding:6px 4px;">#</th><th style="padding:6px 4px;">Tgl</th>' +
+      '<th style="padding:6px 4px;">Entry</th><th style="padding:6px 4px;">Exit</th>' +
+      '<th style="padding:6px 4px;">Alasan</th><th style="padding:6px 4px;">P&amp;L %</th>' +
+      '<th style="padding:6px 4px;">Net ($)</th></tr></thead><tbody>';
+    trades.slice(0, 100).forEach(function (t) {
+      var isWin = t.is_win;
+      var color = isWin ? '#22dd88' : '#ff5b6e';
+      var sign = t.pnl_pct >= 0 ? '+' : '';
+      h += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">' +
+        '<td style="padding:6px 4px;color:#8b8baa;">' + (t.trade_num || '') + '</td>' +
+        '<td style="padding:6px 4px;font-size:11px;">' + esc((t.entry_date || '').slice(5)) + '</td>' +
+        '<td style="padding:6px 4px;">' + Number(t.entry_price || 0).toFixed(2) + '</td>' +
+        '<td style="padding:6px 4px;">' + Number(t.exit_price || 0).toFixed(2) + '</td>' +
+        '<td style="padding:6px 4px;"><span class="chip" style="font-size:10px;padding:2px 5px;">' + esc(t.exit_reason || '-') + '</span></td>' +
+        '<td style="padding:6px 4px;font-weight:bold;color:' + color + ';">' + sign + Number(t.pnl_pct || 0).toFixed(2) + '%</td>' +
+        '<td style="padding:6px 4px;color:' + color + ';">$' + Number(t.pnl_usd || 0).toFixed(2) + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table></div>';
+    if (trades.length > 100) {
+      h += '<p class="hint mt-1">Menampilkan 100 trade pertama dari total ' + trades.length + '.</p>';
+    }
+    h += '</details></div>';
+  }
   r.innerHTML = h;
   drawEquity(res.equity_curve || []);
 }
@@ -551,11 +611,25 @@ async function loadSignals() {
     if (!data.length) data = demoSignals();
   }
   state.signals = data;
+  var scHtml = '';
+  var activeScs = (state.scanners || []).filter(function (s) { return s.is_active; });
+  if (activeScs.length) {
+    scHtml = '<div class="card accent mb-1"><h4>📡 Scanner Aktif (' + activeScs.length + ')</h4>' +
+      activeScs.map(function (s) {
+        var st = (state.strategies || []).find(function (x) { return x.id === s.strategy_id; });
+        var name = st ? st.name : 'Strategi ' + s.strategy_id.slice(0, 8);
+        var pair = st ? st.pair + ' • ' + st.timeframe : '';
+        return '<div class="flex-between py-1" style="border-bottom:1px solid rgba(255,255,255,0.08);padding:6px 0;">' +
+          '<div><b>' + esc(name) + '</b><div class="hint">' + esc(pair) + '</div></div>' +
+          '<button class="btn btn-sm btn-danger" onclick="deactivateScanner(\'' + s.id + '\')">⏹ Stop</button></div>';
+      }).join('') + '</div>';
+  }
+
   if (!data.length) {
-    el.innerHTML = '<div class="empty-state"><div class="icon">🔔</div><p>Belum ada sinyal.<br>Aktifkan scanner pada strategi yang sudah backtest.</p></div>';
+    el.innerHTML = scHtml + '<div class="empty-state"><div class="icon">🔔</div><p>Belum ada sinyal.<br>Aktifkan scanner pada strategi yang sudah backtest.</p></div>';
     return;
   }
-  el.innerHTML = '<div class="flex-between mb-1"><h2 class="section-title">🔔 Signals (' + data.length + ')' + (ONLINE ? '' : ' <span class="chip">offline</span>') + '</h2>' +
+  el.innerHTML = scHtml + '<div class="flex-between mb-1"><h2 class="section-title">🔔 Signals (' + data.length + ')' + (ONLINE ? '' : ' <span class="chip">offline</span>') + '</h2>' +
     '<button class="btn btn-sm btn-primary" onclick="loadSignals()">🔄 Refresh</button></div>' +
     data.map(function (s) {
       var dir = (s.direction || 'hold').toLowerCase();

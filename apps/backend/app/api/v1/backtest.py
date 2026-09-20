@@ -43,6 +43,7 @@ async def _run_and_save_backtest(
             start_date=request.start_date,
             end_date=request.end_date,
             initial_capital=request.initial_capital,
+            position_size_pct=request.position_size_pct,
             enable_walk_forward=request.enable_walk_forward,
         )
 

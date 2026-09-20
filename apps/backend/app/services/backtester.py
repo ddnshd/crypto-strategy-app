@@ -70,6 +70,7 @@ class Backtester:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         initial_capital: float = 1000.0,
+        position_size_pct: Optional[float] = None,
         enable_walk_forward: bool = True,
         commission_pct: float = DEFAULT_COMMISSION_PCT,
         slippage_pct: float = DEFAULT_SLIPPAGE_PCT,
@@ -99,6 +100,7 @@ class Backtester:
         full_result = self._run_simulation(
             df, strategy_definition, initial_capital,
             timeframe, commission_pct, slippage_pct,
+            position_size_pct=position_size_pct,
         )
 
         walk_forward_result = None
@@ -106,6 +108,7 @@ class Backtester:
             walk_forward_result = self._walk_forward(
                 df, strategy_definition, initial_capital,
                 timeframe, commission_pct, slippage_pct,
+                position_size_pct=position_size_pct,
             )
 
         score = compute_strategy_score(
@@ -128,7 +131,7 @@ class Backtester:
             "walk_forward": walk_forward_result,
         }
 
-    def _walk_forward(self, df, strategy_def, capital, timeframe, commission, slippage):
+    def _walk_forward(self, df, strategy_def, capital, timeframe, commission, slippage, position_size_pct=None):
         """Rolling walk-forward with 5 folds."""
         n = len(df)
         fold_size = n // 5
@@ -141,7 +144,10 @@ class Backtester:
             # Include up to 50 warmup bars before fold so indicators are fully initialized
             chunk_start = max(0, start - 50)
             chunk = df.iloc[chunk_start:end]
-            res = self._run_simulation(chunk, strategy_def, capital, timeframe, commission, slippage)
+            res = self._run_simulation(
+                chunk, strategy_def, capital, timeframe, commission, slippage,
+                position_size_pct=position_size_pct,
+            )
             folds.append({
                 "period": f"{df.index[start].date()} to {df.index[end - 1].date()}",
                 "win_rate": res["win_rate"],
@@ -206,13 +212,18 @@ class Backtester:
         timeframe: str = "1h",
         commission_pct: float = DEFAULT_COMMISSION_PCT,
         slippage_pct: float = DEFAULT_SLIPPAGE_PCT,
+        position_size_pct: Optional[float] = None,
     ) -> dict:
         entry_conditions = [c for c in strategy_def.get("entry_conditions", []) if isinstance(c, dict)]
         exit_def = strategy_def.get("exit_conditions", {})
         if not isinstance(exit_def, dict):
             exit_def = {}
         filters = [c for c in strategy_def.get("filters", []) if isinstance(c, dict)]
-        position_size_pct = float(strategy_def.get("position_size_pct", 100.0) or 100.0)
+
+        if position_size_pct is not None and position_size_pct > 0:
+            effective_pos_size = float(position_size_pct)
+        else:
+            effective_pos_size = float(strategy_def.get("position_size_pct", 100.0) or 100.0)
 
         tp_pct = exit_def.get("take_profit_pct")
         sl_pct = exit_def.get("stop_loss_pct")
@@ -369,7 +380,7 @@ class Backtester:
                         exit_reason = "Signal"
 
                 if exit_price is not None:
-                    position_capital = capital * (position_size_pct / 100)
+                    position_capital = capital * (effective_pos_size / 100)
 
                     # Commission: entry + exit
                     commission_cost = position_capital * (commission_pct / 100) * 2

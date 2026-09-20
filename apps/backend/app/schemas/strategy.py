@@ -98,6 +98,7 @@ class BacktestRequest(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     initial_capital: float = 1000.0
+    position_size_pct: Optional[float] = None  # overrides strategy position_size_pct if provided
     enable_walk_forward: bool = True
 
 
