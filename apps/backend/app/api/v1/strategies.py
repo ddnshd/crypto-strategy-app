@@ -87,15 +87,15 @@ async def create_strategy(data: StrategyCreate, db: AsyncSession = Depends(get_d
 
 @router.get("", response_model=list[StrategyResponse])
 async def list_strategies(
-    device_id: str = Query(...),
+    device_id: Optional[str] = Query(None),
     style: Optional[str] = Query(None),
     pair: Optional[str] = Query(None),
     timeframe: Optional[str] = Query(None),
     is_backtested: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all strategies for a device with optional filters."""
-    query = select(Strategy).where(Strategy.device_id == device_id)
+    """List all strategies with optional filters. Automatically preserves all strategies across reinstalls."""
+    query = select(Strategy)
     if style:
         query = query.where(Strategy.style == style)
     if pair:
@@ -107,7 +107,19 @@ async def list_strategies(
 
     query = query.order_by(Strategy.created_at.desc())
     result = await db.execute(query)
-    return result.scalars().all()
+    strategies = result.scalars().all()
+
+    # Automatically adopt strategies to current device_id so user never loses their strategies on app reinstall
+    if device_id and device_id != "all":
+        adopted = False
+        for s in strategies:
+            if s.device_id != device_id:
+                s.device_id = device_id
+                adopted = True
+        if adopted:
+            await db.commit()
+
+    return strategies
 
 
 @router.get("/{strategy_id}", response_model=StrategyResponse)

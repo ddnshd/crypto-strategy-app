@@ -46,6 +46,18 @@
 
   <div id="toast" class="toast hidden"></div>
   <div id="loading" class="loading-overlay hidden"><div class="spinner"></div><p>Memuat...</p></div>
+
+  <!-- Confirm Modal -->
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3 id="modal-title">Konfirmasi</h3>
+      <p id="modal-message">Apakah Anda yakin?</p>
+      <div class="btn-row">
+        <button id="modal-btn-cancel" class="btn btn-secondary">Batal</button>
+        <button id="modal-btn-confirm" class="btn btn-danger">Hapus</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="./app.js"></script>

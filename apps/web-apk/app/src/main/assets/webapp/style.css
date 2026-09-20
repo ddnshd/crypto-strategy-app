@@ -140,3 +140,12 @@ canvas.chart{width:100%;height:120px;background:#0d0d30;border-radius:12px;
 .text-yellow{color:var(--yellow)}.text-blue{color:#8a8aff}
 .section-title{font-size:.95rem;margin:4px 2px 10px}
 .hint{font-size:.74rem;color:var(--dim);line-height:1.5}
+
+/* Confirm Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(5,5,20,.78);display:flex;
+  align-items:center;justify-content:center;z-index:1100;padding:20px;backdrop-filter:blur(6px);
+  animation:fadeUp .2s ease}
+.modal-card{background:linear-gradient(180deg,#1d1d52,#141440);border:1px solid var(--line);
+  border-radius:var(--radius);padding:22px;max-width:380px;width:100%;box-shadow:var(--shadow)}
+.modal-card h3{margin-bottom:8px;font-size:1.15rem;color:#fff}
+.modal-card p{color:var(--muted);font-size:.88rem;line-height:1.5;margin-bottom:18px}

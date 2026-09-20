@@ -3,8 +3,35 @@ let API_BASE = localStorage.getItem('cs_api_base') || '';
 let ONLINE = false;
 let LAST_ERROR = '';
 let TRIED_URLS = [];
-let DEVICE_ID = localStorage.getItem('cs_device_id') || '';
-if (!DEVICE_ID) { DEVICE_ID = 'dev-' + Math.random().toString(36).slice(2, 10); localStorage.setItem('cs_device_id', DEVICE_ID); }
+function getPersistentDeviceId() {
+  try {
+    if (typeof window.AndroidBackend !== 'undefined' && window.AndroidBackend && typeof window.AndroidBackend.getDeviceId === 'function') {
+      var id = window.AndroidBackend.getDeviceId();
+      if (id) {
+        localStorage.setItem('cs_device_id', id);
+        return id;
+      }
+    }
+  } catch (e) {}
+  var saved = localStorage.getItem('cs_device_id');
+  if (!saved) {
+    saved = 'dev-default';
+    localStorage.setItem('cs_device_id', saved);
+  }
+  return saved;
+}
+function syncBridgeDeviceId() {
+  try {
+    if (typeof window.AndroidBackend !== 'undefined' && window.AndroidBackend && typeof window.AndroidBackend.getDeviceId === 'function') {
+      var id = window.AndroidBackend.getDeviceId();
+      if (id && DEVICE_ID !== id) {
+        DEVICE_ID = id;
+        localStorage.setItem('cs_device_id', id);
+      }
+    }
+  } catch (e) {}
+}
+let DEVICE_ID = getPersistentDeviceId();
 const state = { strategies: [], signals: [], scanners: [], prices: {}, activeTab: 'home', lastAI: null };
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -15,6 +42,34 @@ function showToast(msg, type) {
   t.textContent = msg; t.className = 'toast ' + (type || '');
   setTimeout(function () { t.classList.add('hidden'); }, 2800);
 }
+function showConfirm(title, message, onConfirm) {
+  var m = document.getElementById('confirm-modal');
+  if (!m) {
+    if (confirm(message)) { if (typeof onConfirm === 'function') onConfirm(); }
+    return;
+  }
+  document.getElementById('modal-title').textContent = title || 'Konfirmasi';
+  document.getElementById('modal-message').textContent = message || 'Apakah Anda yakin?';
+  m.classList.remove('hidden');
+
+  var btnConfirm = document.getElementById('modal-btn-confirm');
+  var btnCancel = document.getElementById('modal-btn-cancel');
+
+  var cleanup = function () {
+    m.classList.add('hidden');
+    btnConfirm.onclick = null;
+    btnCancel.onclick = null;
+  };
+
+  btnConfirm.onclick = function () {
+    cleanup();
+    if (typeof onConfirm === 'function') onConfirm();
+  };
+  btnCancel.onclick = function () {
+    cleanup();
+  };
+}
+window.showConfirm = showConfirm;
 function saveCache(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 function loadCache(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
 
@@ -42,6 +97,7 @@ async function fetchTimeout(url, opts, ms) {
   } catch (e) { clearTimeout(t); throw e; }
 }
 async function detectApi() {
+  syncBridgeDeviceId();
   var cands = apiCandidates();
   TRIED_URLS = cands.slice();
   for (var i = 0; i < cands.length; i++) {
@@ -418,12 +474,22 @@ window.showDetail = async function (id) {
   } catch (e) { showToast('Gagal: ' + e.message, 'error'); }
   hideLoading();
 };
-window.deleteStrategy = async function (id) {
-  if (!confirm('Hapus strategi ini?')) return;
-  showLoading();
-  try { await api('/api/v1/strategies/' + id, 'DELETE'); showToast('Dihapus', 'success'); await loadLibrary(); }
-  catch (e) { showToast('Gagal: ' + e.message, 'error'); }
-  hideLoading();
+window.deleteStrategy = function (id) {
+  showConfirm(
+    'Hapus Strategi',
+    'Hapus strategi ini secara permanen? Riwayat backtest dan scanner terkait juga akan dihapus.',
+    async function () {
+      showLoading();
+      try {
+        await api('/api/v1/strategies/' + id, 'DELETE');
+        showToast('Strategi berhasil dihapus', 'success');
+        await loadLibrary();
+      } catch (e) {
+        showToast('Gagal hapus: ' + e.message, 'error');
+      }
+      hideLoading();
+    }
+  );
 };
 window.duplicateStrategy = async function (id) {
   showLoading();

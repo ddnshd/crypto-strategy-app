@@ -1,5 +1,6 @@
 import uuid
 import logging
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -89,14 +90,21 @@ async def deactivate_scanner(scanner_id: str, db: AsyncSession = Depends(get_db)
 
 @router.get("", response_model=list[ScannerResponse])
 async def list_scanners(
-    device_id: str = Query(...),
+    device_id: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all scanners for a device."""
-    result = await db.execute(
-        select(ActiveScanner).where(ActiveScanner.device_id == device_id)
-    )
-    return result.scalars().all()
+    """List all scanners for a device, adopting legacy scanners across reinstalls."""
+    result = await db.execute(select(ActiveScanner))
+    scanners = result.scalars().all()
+    if device_id and device_id != "all":
+        adopted = False
+        for s in scanners:
+            if s.device_id != device_id:
+                s.device_id = device_id
+                adopted = True
+        if adopted:
+            await db.commit()
+    return scanners
 
 
 @router.put("/{scanner_id}/fcm-token")

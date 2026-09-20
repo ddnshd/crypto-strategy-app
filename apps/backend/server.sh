@@ -15,7 +15,7 @@ case "$1" in
       exit 0
     fi
     echo "Starting Crypto Strategy API on port $PORT..."
-    nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT \
+    setsid python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT \
       < /dev/null > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     sleep 3
@@ -31,11 +31,12 @@ case "$1" in
   stop)
     if [ -f "$PID_FILE" ]; then
       PID=$(cat "$PID_FILE")
-      kill "$PID" 2>/dev/null && echo "Backend stopped (PID: $PID)"
+      kill "$PID" 2>/dev/null
       rm -f "$PID_FILE"
-    else
-      echo "Backend not running"
     fi
+    pkill -f "uvicorn app.main:app.*8001" 2>/dev/null
+    sleep 1
+    echo "Backend stopped"
     ;;
   restart)
     $0 stop

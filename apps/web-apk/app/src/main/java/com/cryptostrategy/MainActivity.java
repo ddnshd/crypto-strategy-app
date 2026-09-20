@@ -43,6 +43,30 @@ public class MainActivity extends AppCompatActivity {
         settings.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(false);
         webView.setWebViewClient(new android.webkit.WebViewClient());
+        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public boolean onJsAlert(WebView view, String url, String message, android.webkit.JsResult result) {
+                new androidx.appcompat.app.AlertDialog.Builder(MainActivity.this)
+                    .setTitle("Crypto Strategy")
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, (d, w) -> result.confirm())
+                    .setCancelable(false)
+                    .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsConfirm(WebView view, String url, String message, android.webkit.JsResult result) {
+                new androidx.appcompat.app.AlertDialog.Builder(MainActivity.this)
+                    .setTitle("Konfirmasi")
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, (d, w) -> result.confirm())
+                    .setNegativeButton(android.R.string.cancel, (d, w) -> result.cancel())
+                    .setCancelable(false)
+                    .show();
+                return true;
+            }
+        });
         webView.addJavascriptInterface(new BackendBridge(), "AndroidBackend");
         webView.loadUrl("file:///android_asset/webapp/index.html");
     }
@@ -61,6 +85,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private class BackendBridge {
+        @JavascriptInterface
+        public String getDeviceId() {
+            try {
+                String androidId = android.provider.Settings.Secure.getString(getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+                if (androidId != null && !androidId.isEmpty()) {
+                    return "android-" + androidId;
+                }
+            } catch (Exception ignored) {}
+            return "android-device";
+        }
+
         @JavascriptInterface
         public boolean isTermuxInstalled() {
             try {

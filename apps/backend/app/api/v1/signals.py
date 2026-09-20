@@ -14,17 +14,16 @@ router = APIRouter(prefix="/signals", tags=["signals"])
 
 @router.get("", response_model=list[SignalResponse])
 async def list_signals(
-    device_id: str = Query(...),
+    device_id: Optional[str] = Query(None),
     strategy_id: Optional[str] = Query(None),
     pair: Optional[str] = Query(None),
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    """List signals for a device."""
+    """List signals, retaining all historical signals across reinstalls."""
     query = (
         select(Signal, Strategy.name.label("strategy_name"))
         .join(Strategy, Signal.strategy_id == Strategy.id, isouter=True)
-        .where(Signal.device_id == device_id)
     )
     if strategy_id:
         query = query.where(Signal.strategy_id == strategy_id)
@@ -74,9 +73,7 @@ async def get_signal(signal_id: str, db: AsyncSession = Depends(get_db)):
 @router.get("/stats/{device_id}")
 async def get_signal_stats(device_id: str, db: AsyncSession = Depends(get_db)):
     """Get signal performance stats for dashboard."""
-    result = await db.execute(
-        select(Signal).where(Signal.device_id == device_id)
-    )
+    result = await db.execute(select(Signal))
     signals = result.scalars().all()
 
     total = len(signals)
