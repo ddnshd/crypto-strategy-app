@@ -1,13 +1,27 @@
-import pandas as pd
-import numpy as np
-import ta
-from typing import Any
+import re
 import logging
+from typing import Any
+import numpy as np
+import pandas as pd
+import ta
 
 logger = logging.getLogger(__name__)
 
 
-def compute_indicators(df: pd.DataFrame, conditions: list[dict]) -> pd.DataFrame:
+def _extract_period(indicator: str, params: dict, default: int = 14) -> int:
+    """Extract numeric period from params or from indicator name (e.g. EMA_200 -> 200)."""
+    if params and "period" in params and isinstance(params["period"], (int, float)):
+        return int(params["period"])
+    m = re.search(r"(\d+)$", indicator)
+    if m:
+        try:
+            return int(m.group(1))
+        except (ValueError, TypeError):
+            pass
+    return default
+
+
+def compute_indicators(df: pd.DataFrame, conditions: list) -> pd.DataFrame:
     """
     Compute all required indicators from strategy conditions and add to df.
     Returns augmented DataFrame.
@@ -19,41 +33,30 @@ def compute_indicators(df: pd.DataFrame, conditions: list[dict]) -> pd.DataFrame
     volume = df["volume"]
 
     for cond in conditions:
-        indicator = cond.get("indicator", "").upper()
-        params = cond.get("params", {})
+        if not isinstance(cond, dict):
+            continue
+        indicator = cond.get("indicator", "")
+        params = cond.get("params", {}) or {}
         compare_to = cond.get("compare_to")
 
         # Also compute compare_to indicator if present
-        if compare_to:
-            _compute_single(df, compare_to.upper(), {}, close, high, low, volume)
+        if compare_to and isinstance(compare_to, str):
+            _compute_single(df, compare_to.upper(), params, close, high, low, volume)
 
-        _compute_single(df, indicator, params, close, high, low, volume)
+        if indicator and isinstance(indicator, str):
+            _compute_single(df, indicator.upper(), params, close, high, low, volume)
 
     return df
 
 
-def _compute_single(df, indicator, params, close, high, low, volume):
+def _compute_single(df: pd.DataFrame, indicator: str, params: dict, close, high, low, volume):
     """Compute a single indicator and add to df."""
+    if not indicator:
+        return
+    params = params or {}
     try:
-        if indicator == "RSI":
-            period = params.get("period", 14)
-            col = f"RSI_{period}"
-            if col not in df.columns:
-                df[col] = ta.momentum.RSIIndicator(close, window=period).rsi()
-
-        elif indicator == "EMA":
-            period = params.get("period", 20)
-            col = f"EMA_{period}"
-            if col not in df.columns:
-                df[col] = ta.trend.EMAIndicator(close, window=period).ema_indicator()
-
-        elif indicator == "SMA":
-            period = params.get("period", 20)
-            col = f"SMA_{period}"
-            if col not in df.columns:
-                df[col] = ta.trend.SMAIndicator(close, window=period).sma_indicator()
-
-        elif indicator == "EMA_CROSS":
+        # Cross indicators (MUST be checked before EMA/SMA)
+        if indicator in ("EMA_CROSS", "EMA_CROSSING"):
             fast = params.get("fast", 9)
             slow = params.get("slow", 21)
             fast_col = f"EMA_{fast}"
@@ -62,8 +65,9 @@ def _compute_single(df, indicator, params, close, high, low, volume):
                 df[fast_col] = ta.trend.EMAIndicator(close, window=fast).ema_indicator()
             if slow_col not in df.columns:
                 df[slow_col] = ta.trend.EMAIndicator(close, window=slow).ema_indicator()
+            return
 
-        elif indicator == "SMA_CROSS":
+        if indicator in ("SMA_CROSS", "SMA_CROSSING"):
             fast = params.get("fast", 9)
             slow = params.get("slow", 21)
             fast_col = f"SMA_{fast}"
@@ -72,169 +76,299 @@ def _compute_single(df, indicator, params, close, high, low, volume):
                 df[fast_col] = ta.trend.SMAIndicator(close, window=fast).sma_indicator()
             if slow_col not in df.columns:
                 df[slow_col] = ta.trend.SMAIndicator(close, window=slow).sma_indicator()
+            return
 
-        elif indicator == "MACD":
-            fast = params.get("fast", 12)
-            slow = params.get("slow", 26)
-            signal = params.get("signal", 9)
-            macd = ta.trend.MACD(close, window_slow=slow, window_fast=fast, window_sign=signal)
-            if "MACD_line" not in df.columns:
-                df["MACD_line"] = macd.macd()
-            if "MACD_signal" not in df.columns:
-                df["MACD_signal"] = macd.macd_signal()
-            if "MACD_hist" not in df.columns:
-                df["MACD_hist"] = macd.macd_diff()
-
-        elif indicator == "BBANDS":
-            period = params.get("period", 20)
+        # Bollinger Bands
+        if indicator in ("BBANDS", "BOLLINGER", "BOLLINGER_BANDS", "BB") or indicator.startswith("BB_") or indicator.startswith("BBANDS_") or indicator.startswith("BOLLINGER_"):
+            period = _extract_period(indicator, params, default=20)
             std = params.get("std", 2)
-            bb = ta.volatility.BollingerBands(close, window=period, window_dev=std)
             if f"BB_upper_{period}" not in df.columns:
+                bb = ta.volatility.BollingerBands(close, window=period, window_dev=std)
                 df[f"BB_upper_{period}"] = bb.bollinger_hband()
                 df[f"BB_lower_{period}"] = bb.bollinger_lband()
                 df[f"BB_mid_{period}"] = bb.bollinger_mavg()
                 df[f"BB_width_{period}"] = bb.bollinger_wband()
+            return
 
-        elif indicator == "ATR":
-            period = params.get("period", 14)
-            col = f"ATR_{period}"
+        # RSI
+        if indicator in ("RSI",) or indicator.startswith("RSI_"):
+            period = _extract_period(indicator, params, default=14)
+            col = f"RSI_{period}"
             if col not in df.columns:
-                df[col] = ta.volatility.AverageTrueRange(high, low, close, window=period).average_true_range()
+                df[col] = ta.momentum.RSIIndicator(close, window=period).rsi()
+            return
 
-        elif indicator == "STOCH":
+        # MACD
+        if indicator in ("MACD", "MACD_LINE", "MACD_SIGNAL", "MACD_HIST", "MACD_DIFF", "MACD_HISTOGRAM"):
+            fast = params.get("fast", 12)
+            slow = params.get("slow", 26)
+            signal = params.get("signal", 9)
+            if "MACD_line" not in df.columns:
+                macd = ta.trend.MACD(close, window_slow=slow, window_fast=fast, window_sign=signal)
+                df["MACD_line"] = macd.macd()
+                df["MACD_signal"] = macd.macd_signal()
+                df["MACD_hist"] = macd.macd_diff()
+            return
+
+        # Stochastic
+        if indicator in ("STOCH", "STOCHASTIC", "STOCH_K", "STOCH_D"):
             k_period = params.get("k", 14)
             d_period = params.get("d", 3)
-            stoch = ta.momentum.StochasticOscillator(high, low, close, window=k_period, smooth_window=d_period)
             if "STOCH_k" not in df.columns:
+                stoch = ta.momentum.StochasticOscillator(high, low, close, window=k_period, smooth_window=d_period)
                 df["STOCH_k"] = stoch.stoch()
                 df["STOCH_d"] = stoch.stoch_signal()
+            return
 
-        elif indicator == "VOLUME_SMA":
-            period = params.get("period", 20)
+        # Volume Moving Average
+        if indicator in ("VOLUME_SMA", "VOL_SMA", "VOLUME_MA", "VOL_MA") or indicator.startswith("VOLUME_SMA_") or indicator.startswith("VOL_SMA_"):
+            period = _extract_period(indicator, params, default=20)
             col = f"VOLUME_SMA_{period}"
             if col not in df.columns:
                 df[col] = volume.rolling(window=period).mean()
+            return
 
-        elif indicator in ("PRICE", "CLOSE"):
-            pass  # use df["close"] directly
+        # ATR
+        if indicator in ("ATR",) or indicator.startswith("ATR_"):
+            period = _extract_period(indicator, params, default=14)
+            col = f"ATR_{period}"
+            if col not in df.columns:
+                df[col] = ta.volatility.AverageTrueRange(high, low, close, window=period).average_true_range()
+            return
 
-        elif indicator == "VOLUME":
-            pass  # use df["volume"] directly
+        # EMA
+        if indicator == "EMA" or (indicator.startswith("EMA_") and indicator[4:].isdigit()) or (indicator.startswith("EMA") and indicator[3:].isdigit()):
+            period = _extract_period(indicator, params, default=20)
+            col = f"EMA_{period}"
+            if col not in df.columns:
+                df[col] = ta.trend.EMAIndicator(close, window=period).ema_indicator()
+            return
+
+        # SMA
+        if indicator == "SMA" or (indicator.startswith("SMA_") and indicator[4:].isdigit()) or (indicator.startswith("SMA") and indicator[3:].isdigit()):
+            period = _extract_period(indicator, params, default=20)
+            col = f"SMA_{period}"
+            if col not in df.columns:
+                df[col] = ta.trend.SMAIndicator(close, window=period).sma_indicator()
+            return
+
+        # Simple price/volume fields
+        if indicator in ("PRICE", "CLOSE", "OPEN", "HIGH", "LOW", "VOLUME", "VOL"):
+            return
 
     except Exception as e:
         logger.warning(f"Failed to compute indicator {indicator}: {e}")
-
-    return df
 
 
 def evaluate_condition(df: pd.DataFrame, cond: dict) -> pd.Series:
     """
     Evaluate a single condition and return boolean Series.
+    Always safe: never throws exception, returns boolean series.
     """
-    indicator = cond.get("indicator", "").upper()
-    params = cond.get("params", {})
+    if not isinstance(cond, dict):
+        return pd.Series(True, index=df.index)
+
+    indicator = cond.get("indicator", "")
+    if not indicator or not isinstance(indicator, str):
+        return pd.Series(True, index=df.index)
+
+    params = cond.get("params", {}) or {}
     operator = cond.get("operator", "")
     value = cond.get("value")
     compare_to = cond.get("compare_to")
 
-    close = df["close"]
+    try:
+        # Get LHS
+        lhs = _get_indicator_series(df, indicator.upper(), params, operator=operator, is_rhs=False)
 
-    # Get the left-hand side series
-    lhs = _get_indicator_series(df, indicator, params)
+        # Get RHS
+        if compare_to and isinstance(compare_to, str):
+            rhs = _get_indicator_series(df, compare_to.upper(), params, operator=operator, is_rhs=True)
+        else:
+            rhs = value
 
-    # Get the right-hand side (value or another series)
-    if compare_to:
-        rhs = _get_indicator_series(df, compare_to.upper(), {})
-    else:
-        rhs = value
+        # Evaluate cross operators
+        if operator in ("cross_above", "cross_below"):
+            if rhs is None:
+                rhs_series = pd.Series(0.0, index=df.index)
+            elif isinstance(rhs, (int, float)):
+                rhs_series = pd.Series(float(rhs), index=df.index)
+            elif isinstance(rhs, pd.Series):
+                rhs_series = rhs
+            else:
+                rhs_series = pd.Series(0.0, index=df.index)
 
-    # Evaluate operator
-    if operator in ("cross_above", "cross_below"):
-        # For cross operators: default rhs to 0 if None (for EMA_CROSS etc.)
+            if operator == "cross_above":
+                prev_below = lhs.shift(1) <= rhs_series.shift(1)
+                curr_above = lhs > rhs_series
+                return (prev_below & curr_above).fillna(False)
+            else:
+                prev_above = lhs.shift(1) >= rhs_series.shift(1)
+                curr_below = lhs < rhs_series
+                return (prev_above & curr_below).fillna(False)
+
+        # For comparison operators, if rhs is None, default to 0.0
         if rhs is None:
-            rhs_series = pd.Series(0.0, index=df.index)
-        elif isinstance(rhs, (int, float)):
-            rhs_series = pd.Series(rhs, index=df.index)
-        elif isinstance(rhs, pd.Series):
-            rhs_series = rhs
+            rhs = 0.0
+
+        if operator == "<":
+            return (lhs < rhs).fillna(False)
+        elif operator == ">":
+            return (lhs > rhs).fillna(False)
+        elif operator == "<=":
+            return (lhs <= rhs).fillna(False)
+        elif operator == ">=":
+            return (lhs >= rhs).fillna(False)
+        elif operator == "==":
+            return (lhs == rhs).fillna(False)
         else:
-            rhs_series = pd.Series(0.0, index=df.index)
-        if operator == "cross_above":
-            prev_below = lhs.shift(1) <= rhs_series.shift(1)
-            curr_above = lhs > rhs_series
-            return prev_below & curr_above
-        else:
-            prev_above = lhs.shift(1) >= rhs_series.shift(1)
-            curr_below = lhs < rhs_series
-            return prev_above & curr_below
-    elif operator == "<":
-        return lhs < rhs
-    elif operator == ">":
-        return lhs > rhs
-    elif operator == "<=":
-        return lhs <= rhs
-    elif operator == ">=":
-        return lhs >= rhs
-    elif operator == "==":
-        return lhs == rhs
-    else:
-        logger.warning(f"Unknown operator '{operator}', returning all False")
-        return pd.Series(False, index=df.index)
+            logger.warning(f"Unknown operator '{operator}', returning all False")
+            return pd.Series(False, index=df.index)
+
+    except Exception as e:
+        logger.warning(f"Error evaluating condition {cond}: {e}")
+        return pd.Series(True, index=df.index)
 
 
-def _get_indicator_series(df: pd.DataFrame, indicator: str, params: dict) -> pd.Series:
-    """Map indicator name to the correct DataFrame column."""
-    if indicator in ("PRICE", "CLOSE"):
-        return df["close"]
-    elif indicator == "OPEN":
+def _get_indicator_series(df: pd.DataFrame, indicator: str, params: dict, operator: str = "", is_rhs: bool = False) -> pd.Series:
+    """Map indicator name to the correct DataFrame column. Computes on-the-fly if missing."""
+    indicator = (indicator or "").upper().strip()
+    params = params or {}
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    volume = df["volume"]
+
+    # Basic price/volume
+    if indicator in ("PRICE", "CLOSE", "C"):
+        return close
+    elif indicator in ("OPEN", "O"):
         return df["open"]
-    elif indicator == "HIGH":
-        return df["high"]
-    elif indicator == "LOW":
-        return df["low"]
-    elif indicator == "VOLUME":
-        return df["volume"]
-    elif indicator == "RSI":
-        period = params.get("period", 14)
-        return df[f"RSI_{period}"]
-    elif indicator == "EMA":
-        period = params.get("period", 20)
-        return df[f"EMA_{period}"]
-    elif indicator == "SMA":
-        period = params.get("period", 20)
-        return df[f"SMA_{period}"]
-    elif indicator == "EMA_CROSS":
+    elif indicator in ("HIGH", "H"):
+        return high
+    elif indicator in ("LOW", "L"):
+        return low
+    elif indicator in ("VOLUME", "VOL", "V"):
+        return volume
+
+    # Cross indicators (MUST be checked before EMA/SMA)
+    elif indicator in ("EMA_CROSS", "EMA_CROSSING"):
         fast = params.get("fast", 9)
         slow = params.get("slow", 21)
-        return df[f"EMA_{fast}"] - df[f"EMA_{slow}"]  # positive = fast above slow
-    elif indicator == "SMA_CROSS":
+        fast_col = f"EMA_{fast}"
+        slow_col = f"EMA_{slow}"
+        if fast_col not in df.columns:
+            df[fast_col] = ta.trend.EMAIndicator(close, window=fast).ema_indicator()
+        if slow_col not in df.columns:
+            df[slow_col] = ta.trend.EMAIndicator(close, window=slow).ema_indicator()
+        return df[fast_col] - df[slow_col]
+
+    elif indicator in ("SMA_CROSS", "SMA_CROSSING"):
         fast = params.get("fast", 9)
         slow = params.get("slow", 21)
-        return df[f"SMA_{fast}"] - df[f"SMA_{slow}"]
-    elif indicator == "MACD":
+        fast_col = f"SMA_{fast}"
+        slow_col = f"SMA_{slow}"
+        if fast_col not in df.columns:
+            df[fast_col] = ta.trend.SMAIndicator(close, window=fast).sma_indicator()
+        if slow_col not in df.columns:
+            df[slow_col] = ta.trend.SMAIndicator(close, window=slow).sma_indicator()
+        return df[fast_col] - df[slow_col]
+
+    # Bollinger Bands
+    elif indicator in ("BBANDS", "BOLLINGER", "BOLLINGER_BANDS", "BB") or indicator.startswith("BB_") or indicator.startswith("BBANDS_") or indicator.startswith("BOLLINGER_"):
+        period = _extract_period(indicator, params, default=20)
+        std = params.get("std", 2)
+        if f"BB_upper_{period}" not in df.columns:
+            bb = ta.volatility.BollingerBands(close, window=period, window_dev=std)
+            df[f"BB_upper_{period}"] = bb.bollinger_hband()
+            df[f"BB_lower_{period}"] = bb.bollinger_lband()
+            df[f"BB_mid_{period}"] = bb.bollinger_mavg()
+            df[f"BB_width_{period}"] = bb.bollinger_wband()
+
+        if "UPPER" in indicator or "TOP" in indicator:
+            return df[f"BB_upper_{period}"]
+        elif "LOWER" in indicator or "BOTTOM" in indicator:
+            return df[f"BB_lower_{period}"]
+        elif "MID" in indicator or "MIDDLE" in indicator:
+            return df[f"BB_mid_{period}"]
+        elif "WIDTH" in indicator:
+            return df[f"BB_width_{period}"]
+        else:
+            # Generic BBANDS: pick band based on operator
+            if operator in (">", ">=", "cross_above"):
+                return df[f"BB_upper_{period}"]
+            elif operator in ("<", "<=", "cross_below"):
+                return df[f"BB_lower_{period}"]
+            else:
+                return df[f"BB_mid_{period}"]
+
+    # RSI
+    elif indicator in ("RSI",) or indicator.startswith("RSI_"):
+        period = _extract_period(indicator, params, default=14)
+        col = f"RSI_{period}"
+        if col not in df.columns:
+            df[col] = ta.momentum.RSIIndicator(close, window=period).rsi()
+        return df[col]
+
+    # MACD
+    elif indicator in ("MACD", "MACD_LINE"):
+        if "MACD_line" not in df.columns:
+            _compute_single(df, "MACD", params, close, high, low, volume)
         return df["MACD_line"]
-    elif indicator == "MACD_SIGNAL":
+    elif indicator in ("MACD_SIGNAL",):
+        if "MACD_signal" not in df.columns:
+            _compute_single(df, "MACD", params, close, high, low, volume)
         return df["MACD_signal"]
-    elif indicator == "MACD_HIST":
+    elif indicator in ("MACD_HIST", "MACD_HISTOGRAM", "MACD_DIFF"):
+        if "MACD_hist" not in df.columns:
+            _compute_single(df, "MACD", params, close, high, low, volume)
         return df["MACD_hist"]
-    elif indicator == "STOCH_K":
+
+    # Stochastic
+    elif indicator in ("STOCH", "STOCHASTIC", "STOCH_K"):
+        if "STOCH_k" not in df.columns:
+            _compute_single(df, "STOCH", params, close, high, low, volume)
         return df["STOCH_k"]
-    elif indicator == "STOCH_D":
+    elif indicator in ("STOCH_D",):
+        if "STOCH_d" not in df.columns:
+            _compute_single(df, "STOCH", params, close, high, low, volume)
         return df["STOCH_d"]
-    elif indicator == "ATR":
-        period = params.get("period", 14)
-        return df[f"ATR_{period}"]
-    elif indicator.startswith("BB_UPPER"):
-        period = params.get("period", 20)
-        return df[f"BB_upper_{period}"]
-    elif indicator.startswith("BB_LOWER"):
-        period = params.get("period", 20)
-        return df[f"BB_lower_{period}"]
-    elif indicator.startswith("BB_MID"):
-        period = params.get("period", 20)
-        return df[f"BB_mid_{period}"]
-    elif indicator == "VOLUME_SMA":
-        period = params.get("period", 20)
-        return df[f"VOLUME_SMA_{period}"]
+
+    # Volume Moving Average
+    elif indicator in ("VOLUME_SMA", "VOL_SMA", "VOLUME_MA", "VOL_MA") or indicator.startswith("VOLUME_SMA_") or indicator.startswith("VOL_SMA_"):
+        period = _extract_period(indicator, params, default=20)
+        col = f"VOLUME_SMA_{period}"
+        if col not in df.columns:
+            df[col] = volume.rolling(window=period).mean()
+        return df[col]
+
+    # ATR
+    elif indicator in ("ATR",) or indicator.startswith("ATR_"):
+        period = _extract_period(indicator, params, default=14)
+        col = f"ATR_{period}"
+        if col not in df.columns:
+            df[col] = ta.volatility.AverageTrueRange(high, low, close, window=period).average_true_range()
+        return df[col]
+
+    # EMA
+    elif indicator == "EMA" or (indicator.startswith("EMA_") and indicator[4:].isdigit()) or (indicator.startswith("EMA") and indicator[3:].isdigit()):
+        period = _extract_period(indicator, params, default=20)
+        col = f"EMA_{period}"
+        if col not in df.columns:
+            df[col] = ta.trend.EMAIndicator(close, window=period).ema_indicator()
+        return df[col]
+
+    # SMA
+    elif indicator == "SMA" or (indicator.startswith("SMA_") and indicator[4:].isdigit()) or (indicator.startswith("SMA") and indicator[3:].isdigit()):
+        period = _extract_period(indicator, params, default=20)
+        col = f"SMA_{period}"
+        if col not in df.columns:
+            df[col] = ta.trend.SMAIndicator(close, window=period).sma_indicator()
+        return df[col]
+
     else:
-        raise ValueError(f"Unknown indicator for series lookup: {indicator}")
+        # Check direct column in df
+        if indicator in df.columns:
+            return df[indicator]
+        logger.warning(f"Unknown indicator '{indicator}', fallback to close")
+        return close

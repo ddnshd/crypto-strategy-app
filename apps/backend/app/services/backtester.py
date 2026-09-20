@@ -205,16 +205,18 @@ class Backtester:
         commission_pct: float = DEFAULT_COMMISSION_PCT,
         slippage_pct: float = DEFAULT_SLIPPAGE_PCT,
     ) -> dict:
-        entry_conditions = strategy_def.get("entry_conditions", [])
+        entry_conditions = [c for c in strategy_def.get("entry_conditions", []) if isinstance(c, dict)]
         exit_def = strategy_def.get("exit_conditions", {})
-        filters = strategy_def.get("filters", [])
-        position_size_pct = strategy_def.get("position_size_pct", 1.0)
+        if not isinstance(exit_def, dict):
+            exit_def = {}
+        filters = [c for c in strategy_def.get("filters", []) if isinstance(c, dict)]
+        position_size_pct = float(strategy_def.get("position_size_pct", 100.0) or 100.0)
 
         tp_pct = exit_def.get("take_profit_pct")
         sl_pct = exit_def.get("stop_loss_pct")
         trailing_pct = exit_def.get("trailing_stop_pct")
         max_bars = exit_def.get("max_bars_held")
-        exit_indicator_conds = exit_def.get("exit_conditions", [])
+        exit_indicator_conds = [c for c in exit_def.get("exit_conditions", []) if isinstance(c, dict)]
 
         # Detect short from definition: if short_conditions exist or style is short
         is_short = strategy_def.get("direction") == "short"
@@ -231,9 +233,7 @@ class Backtester:
                     is_short = True
                     break
 
-        all_conditions = [c for c in entry_conditions if isinstance(c, dict)] + \
-                         [c for c in (filters or []) if isinstance(c, dict)] + \
-                         [c for c in (exit_indicator_conds or []) if isinstance(c, dict)]
+        all_conditions = entry_conditions + filters + exit_indicator_conds
         df = compute_indicators(df, all_conditions)
         df = df.dropna()
 
@@ -244,14 +244,15 @@ class Backtester:
         entry_signal = pd.Series(True, index=df.index)
         for cond in entry_conditions:
             try:
-                entry_signal = entry_signal & evaluate_condition(df, cond)
+                sig = evaluate_condition(df, cond)
+                entry_signal = entry_signal & sig
             except Exception as e:
                 logger.warning(f"Entry condition eval failed: {e}")
-                entry_signal = pd.Series(False, index=df.index)
 
-        for cond in (filters or []):
+        for cond in filters:
             try:
-                entry_signal = entry_signal & evaluate_condition(df, cond)
+                sig = evaluate_condition(df, cond)
+                entry_signal = entry_signal & sig
             except Exception as e:
                 logger.warning(f"Filter eval failed: {e}")
 
