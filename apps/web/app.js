@@ -399,7 +399,8 @@ async function loadHistory(sid) {
     var list = await api('/api/v1/backtest/strategy/' + sid);
     if (!list || !list.length) { h.innerHTML = '<p class="hint">Belum ada hasil backtest.</p>'; return; }
     h.innerHTML = list.slice(0, 5).map(function (b) {
-      return '<div class="kv"><span>' + esc((b.created_at || '').slice(0, 10)) + ' • ' + b.total_trades + ' trades</span><b>WR ' + Number(b.win_rate).toFixed(1) + '% • skor ' + Number(b.score).toFixed(1) + '</b></div>';
+      var wr = Number(b.win_rate || 0) * 100;
+      return '<div class="kv"><span>' + esc((b.created_at || '').slice(0, 10)) + ' • ' + b.total_trades + ' trades</span><b>WR ' + wr.toFixed(1) + '% • skor ' + Number(b.score).toFixed(1) + '</b></div>';
     }).join('') + '<button class="btn btn-sm btn-secondary mt-1" onclick="showBacktest(\'' + list[0].id + '\')">Lihat hasil terbaru</button>';
   } catch (e) { h.innerHTML = '<p class="hint">Offline / gagal load riwayat.</p>'; }
 }
@@ -465,7 +466,9 @@ window.showBacktest = async function (bid) {
 function showBacktestData(res) {
   var r = document.getElementById('backtest-result');
   if (!r) return;
-  var wr = Number(res.win_rate || 0);
+  var wr = Number(res.win_rate || 0) * 100;
+  var ret = Number(res.total_return || 0) * 100;
+  var dd = Number(res.max_drawdown || 0) * 100;
   var dir = res.direction || 'long';
   var dirLabel = dir === 'short' ? '📉 SHORT' : '📈 LONG';
   var commission = res.total_commission || 0;
@@ -477,8 +480,8 @@ function showBacktestData(res) {
     '<div class="stat"><b>' + wr.toFixed(1) + '%</b><span>Win rate</span></div>' +
     '<div class="stat"><b>' + Number(res.profit_factor || 0).toFixed(2) + '</b><span>Profit factor</span></div>' +
     '<div class="stat"><b>' + Number(res.score || 0).toFixed(1) + '</b><span>Skor</span></div>' +
-    '<div class="stat"><b>' + Number(res.total_return || 0).toFixed(1) + '%</b><span>Return</span></div>' +
-    '<div class="stat"><b>' + Number(res.max_drawdown || 0).toFixed(1) + '%</b><span>Max DD</span></div>' +
+    '<div class="stat"><b>' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%</b><span>Return</span></div>' +
+    '<div class="stat"><b>' + dd.toFixed(1) + '%</b><span>Max DD</span></div>' +
     '</div>' +
     '<div class="grid-2">' +
     '<div class="stat"><b>' + Number(res.sharpe_ratio || 0).toFixed(2) + '</b><span>Sharpe</span></div>' +

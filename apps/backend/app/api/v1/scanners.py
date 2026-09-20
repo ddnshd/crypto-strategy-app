@@ -45,6 +45,7 @@ async def activate_scanner(
         # Reactivate and update FCM token
         existing.is_active = True
         existing.fcm_token = data.fcm_token
+        strategy.is_active = True
         await db.commit()
         await db.refresh(existing)
         return existing

@@ -1,8 +1,10 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from typing import Optional, List
 
-load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BACKEND_DIR / ".env")
 
 
 class Settings:
@@ -11,10 +13,10 @@ class Settings:
     APP_VERSION: str = os.getenv("APP_VERSION", "1.0.0")
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
-    # Database
+    # Database — always absolute to backend directory
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "sqlite+aiosqlite:///./cryptostrategy.db"
+        f"sqlite+aiosqlite:///{BACKEND_DIR}/cryptostrategy.db"
     )
 
     # Redis

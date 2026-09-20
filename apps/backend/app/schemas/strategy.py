@@ -117,6 +117,8 @@ class BacktestResponse(BaseModel):
     total_trades: int
     winning_trades: int
     losing_trades: int
+    total_commission: Optional[float] = 0.0
+    direction: Optional[str] = "long"
     score: float
     is_qualified: bool
     equity_curve: List[Dict]

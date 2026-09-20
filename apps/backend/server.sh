@@ -16,7 +16,7 @@ case "$1" in
     fi
     echo "Starting Crypto Strategy API on port $PORT..."
     nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT \
-      > "$LOG_FILE" 2>&1 &
+      < /dev/null > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     sleep 3
     if kill -0 "$(cat $PID_FILE)" 2>/dev/null; then

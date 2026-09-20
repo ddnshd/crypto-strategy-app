@@ -138,10 +138,12 @@ class Backtester:
             end = min(start + fold_size, n)
             if end - start < 30:
                 continue
-            chunk = df.iloc[start:end]
+            # Include up to 50 warmup bars before fold so indicators are fully initialized
+            chunk_start = max(0, start - 50)
+            chunk = df.iloc[chunk_start:end]
             res = self._run_simulation(chunk, strategy_def, capital, timeframe, commission, slippage)
             folds.append({
-                "period": f"{chunk.index[0].date()} to {chunk.index[-1].date()}",
+                "period": f"{df.index[start].date()} to {df.index[end - 1].date()}",
                 "win_rate": res["win_rate"],
                 "profit_factor": res["profit_factor"],
                 "total_return": res["total_return"],
@@ -300,24 +302,48 @@ class Backtester:
 
                 if is_short:
                     # Short: TP when price drops, SL when price rises
-                    if tp_pct and current_low <= entry_price * (1 - tp_pct / 100):
+                    hit_tp = bool(tp_pct and current_low <= entry_price * (1 - tp_pct / 100))
+                    hit_sl = bool(sl_pct and current_high >= entry_price * (1 + sl_pct / 100))
+                    hit_trailing = bool(trailing_pct and current_high >= trailing_extreme * (1 + trailing_pct / 100))
+
+                    if hit_tp and hit_sl:
+                        # Ambiguous bar: if green candle, surged first (SL hit first)
+                        if current_close > current_open:
+                            exit_price = entry_price * (1 + sl_pct / 100) + current_open * (slippage_pct / 100)
+                            exit_reason = "SL"
+                        else:
+                            exit_price = entry_price * (1 - tp_pct / 100) - current_open * (slippage_pct / 100)
+                            exit_reason = "TP"
+                    elif hit_tp:
                         exit_price = entry_price * (1 - tp_pct / 100) - current_open * (slippage_pct / 100)
                         exit_reason = "TP"
-                    elif sl_pct and current_high >= entry_price * (1 + sl_pct / 100):
+                    elif hit_sl:
                         exit_price = entry_price * (1 + sl_pct / 100) + current_open * (slippage_pct / 100)
                         exit_reason = "SL"
-                    elif trailing_pct and current_high >= trailing_extreme * (1 + trailing_pct / 100):
+                    elif hit_trailing:
                         exit_price = trailing_extreme * (1 + trailing_pct / 100) + current_open * (slippage_pct / 100)
                         exit_reason = "TrailingStop"
                 else:
                     # Long: TP when price rises, SL when price drops
-                    if tp_pct and current_high >= entry_price * (1 + tp_pct / 100):
+                    hit_tp = bool(tp_pct and current_high >= entry_price * (1 + tp_pct / 100))
+                    hit_sl = bool(sl_pct and current_low <= entry_price * (1 - sl_pct / 100))
+                    hit_trailing = bool(trailing_pct and current_low <= trailing_extreme * (1 - trailing_pct / 100))
+
+                    if hit_tp and hit_sl:
+                        # Ambiguous bar: if red candle, dumped first (SL hit first)
+                        if current_close < current_open:
+                            exit_price = entry_price * (1 - sl_pct / 100) + current_open * (slippage_pct / 100)
+                            exit_reason = "SL"
+                        else:
+                            exit_price = entry_price * (1 + tp_pct / 100) - current_open * (slippage_pct / 100)
+                            exit_reason = "TP"
+                    elif hit_tp:
                         exit_price = entry_price * (1 + tp_pct / 100) - current_open * (slippage_pct / 100)
                         exit_reason = "TP"
-                    elif sl_pct and current_low <= entry_price * (1 - sl_pct / 100):
+                    elif hit_sl:
                         exit_price = entry_price * (1 - sl_pct / 100) + current_open * (slippage_pct / 100)
                         exit_reason = "SL"
-                    elif trailing_pct and current_low <= trailing_extreme * (1 - trailing_pct / 100):
+                    elif hit_trailing:
                         exit_price = trailing_extreme * (1 - trailing_pct / 100) + current_open * (slippage_pct / 100)
                         exit_reason = "TrailingStop"
 
@@ -327,10 +353,12 @@ class Backtester:
 
                 if not exit_price and exit_indicator_conds:
                     exit_triggered = True
+                    # Use window with previous bars so shift(1) works for cross conditions
+                    window = df.iloc[max(0, i - 2):i + 1]
                     for cond in exit_indicator_conds:
                         try:
-                            cond_result = evaluate_condition(df.iloc[i:i+1], cond)
-                            if not cond_result.iloc[0]:
+                            cond_result = evaluate_condition(window, cond)
+                            if not cond_result.iloc[-1]:
                                 exit_triggered = False
                                 break
                         except Exception:
