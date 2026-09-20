@@ -71,6 +71,10 @@ app.add_middleware(
 # Routes
 app.include_router(api_router)
 
+# Also expose WebSocket at root /ws/signals/{device_id} in addition to /api/v1/ws/signals/{device_id}
+from app.api.v1.ws import websocket_signals
+app.add_api_websocket_route("/ws/signals/{device_id}", websocket_signals)
+
 
 @app.get("/health")
 async def health_check():
