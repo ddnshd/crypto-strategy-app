@@ -145,8 +145,10 @@ class SignalResponse(BaseModel):
     reason: Optional[str]
     triggered_indicators: Optional[Dict]
     is_hit: Optional[bool]
+    close_price: Optional[float] = None
     pnl_pct: Optional[float]
     triggered_at: datetime
+    closed_at: Optional[datetime] = None
 
     class Config:
         orm_mode = True

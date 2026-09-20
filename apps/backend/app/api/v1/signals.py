@@ -52,8 +52,10 @@ async def list_signals(
             "reason": signal.reason,
             "triggered_indicators": signal.triggered_indicators,
             "is_hit": signal.is_hit,
+            "close_price": signal.close_price,
             "pnl_pct": signal.pnl_pct,
             "triggered_at": signal.triggered_at,
+            "closed_at": signal.closed_at,
         }
         signals.append(sig_dict)
 

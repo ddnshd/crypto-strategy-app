@@ -31,7 +31,94 @@ class SignalScanner:
                 await self._sync_and_scan()
             except Exception as e:
                 logger.error(f"Scanner loop error: {e}")
-            await asyncio.sleep(60)
+            try:
+                await self._track_pending_signals()
+            except Exception as e:
+                logger.error(f"Paper trading tracker error: {e}")
+            await asyncio.sleep(30)
+
+    async def _track_pending_signals(self):
+        """Track open/pending paper trading signals to see if TP or SL is hit."""
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(Signal).where(Signal.is_hit == None)
+                )
+                pending_signals = result.scalars().all()
+                if not pending_signals:
+                    return
+
+                # Group by pair so we fetch current price once per pair
+                pairs = list(set(s.pair for s in pending_signals))
+                prices = {}
+                price_fetcher = DataFetcher()
+                try:
+                    for p in pairs:
+                        try:
+                            prices[p] = await price_fetcher.get_current_price(p)
+                        except Exception as pe:
+                            logger.debug(f"Failed to get price for {p}: {pe}")
+                finally:
+                    await price_fetcher.close()
+
+                for sig in pending_signals:
+                    current_price = prices.get(sig.pair)
+                    if not current_price:
+                        continue
+
+                    entry = float(sig.entry_price)
+                    tp = float(sig.take_profit) if sig.take_profit else None
+                    sl = float(sig.stop_loss) if sig.stop_loss else None
+                    is_short = sig.direction.lower() == "short"
+
+                    is_hit = None
+                    if is_short:
+                        if tp and current_price <= tp:
+                            is_hit = True
+                        elif sl and current_price >= sl:
+                            is_hit = False
+                    else:
+                        if tp and current_price >= tp:
+                            is_hit = True
+                        elif sl and current_price <= sl:
+                            is_hit = False
+
+                    if is_hit is not None:
+                        if is_short:
+                            pnl_pct = round((entry - current_price) / entry * 100, 4)
+                        else:
+                            pnl_pct = round((current_price - entry) / entry * 100, 4)
+
+                        sig.is_hit = is_hit
+                        sig.close_price = current_price
+                        sig.pnl_pct = pnl_pct
+                        sig.closed_at = datetime.utcnow()
+
+                        logger.info(f"Signal closed: {sig.pair} {sig.direction.upper()} -> {'TP' if is_hit else 'SL'} ({pnl_pct:+.2f}%)")
+
+                        # Notify WebSocket
+                        try:
+                            from app.api.v1.ws import get_ws_manager
+                            ws_manager = get_ws_manager()
+                            await ws_manager.send_to_device(sig.device_id, {
+                                "type": "signal_closed",
+                                "signal": {
+                                    "id": sig.id,
+                                    "pair": sig.pair,
+                                    "direction": sig.direction,
+                                    "entry_price": entry,
+                                    "close_price": current_price,
+                                    "is_hit": is_hit,
+                                    "pnl_pct": pnl_pct,
+                                    "closed_at": sig.closed_at.isoformat(),
+                                }
+                            })
+                        except Exception as wse:
+                            logger.debug(f"WS error: {wse}")
+
+                await session.commit()
+        except Exception as e:
+            logger.error(f"Error tracking pending signals: {e}", exc_info=True)
 
     async def stop(self):
         self._running = False

@@ -73,12 +73,63 @@ async function api(path, method, body) {
   LAST_ERROR = '';
   return data;
 }
+let WS_SOCKET = null;
+let WS_RECONNECT_TIMER = null;
+
+function initSignalWebSocket() {
+  if (!API_BASE || !ONLINE) return;
+  if (WS_SOCKET && (WS_SOCKET.readyState === WebSocket.OPEN || WS_SOCKET.readyState === WebSocket.CONNECTING)) return;
+  try {
+    var wsUrl = API_BASE.replace(/^http/, 'ws') + '/ws/signals/' + encodeURIComponent(DEVICE_ID);
+    WS_SOCKET = new WebSocket(wsUrl);
+    WS_SOCKET.onopen = function () { console.log('Signal WS connected'); };
+    WS_SOCKET.onmessage = function (ev) {
+      try {
+        var msg = JSON.parse(ev.data);
+        if (msg.type === 'new_signal' && msg.signal) {
+          var s = msg.signal;
+          showToast('🔔 Sinyal Baru: ' + s.pair + ' ' + (s.direction || '').toUpperCase() + ' @ ' + s.entry_price, 'info');
+          if (!state.signals.find(function (x) { return x.id === s.id; })) {
+            state.signals.unshift(s);
+            saveCache('cs_signals', state.signals);
+            if (state.activeTab === 'signals') loadSignals();
+            if (state.activeTab === 'home') loadHome();
+          }
+        } else if (msg.type === 'signal_closed' && msg.signal) {
+          var sc = msg.signal;
+          var label = sc.is_hit ? '🎯 TP Hit (+' + Number(sc.pnl_pct || 0).toFixed(2) + '%)' : '🛑 SL Hit (' + Number(sc.pnl_pct || 0).toFixed(2) + '%)';
+          showToast(label + ' on ' + sc.pair, sc.is_hit ? 'success' : 'error');
+          var existing = state.signals.find(function (x) { return x.id === sc.id; });
+          if (existing) {
+            existing.is_hit = sc.is_hit;
+            existing.close_price = sc.close_price;
+            existing.pnl_pct = sc.pnl_pct;
+            existing.closed_at = sc.closed_at;
+            saveCache('cs_signals', state.signals);
+            if (state.activeTab === 'signals') loadSignals();
+            if (state.activeTab === 'home') loadHome();
+          }
+        }
+      } catch (err) {}
+    };
+    WS_SOCKET.onclose = function () {
+      WS_SOCKET = null;
+      clearTimeout(WS_RECONNECT_TIMER);
+      if (ONLINE) WS_RECONNECT_TIMER = setTimeout(initSignalWebSocket, 8000);
+    };
+    WS_SOCKET.onerror = function () {
+      try { WS_SOCKET.close(); } catch (e) {}
+    };
+  } catch (e) {}
+}
+
 function setConn(online) {
   var el = document.getElementById('connection-status');
   var banner = document.getElementById('offline-banner');
   ONLINE = !!online;
   if (el) { el.textContent = online ? '● Online' : '● Offline'; el.className = 'pill ' + (online ? 'online' : 'offline'); }
   if (banner) banner.classList.toggle('hidden', !!online);
+  if (online) initSignalWebSocket();
 }
 async function checkConnection() {
   try {
@@ -173,6 +224,25 @@ async function loadHome() {
   var priceHtml = Object.keys(prices).length
     ? Object.keys(prices).map(function (k) { return '<div class="stat"><b>$' + Number(prices[k]).toLocaleString() + '</b><span>' + esc(k) + '</span></div>'; }).join('')
     : '<div class="stat"><b>-</b><span>Harga live perlu backend</span></div>';
+
+  var statsHtml = '';
+  if (ok) {
+    try {
+      var stats = await api('/api/v1/signals/stats/' + encodeURIComponent(DEVICE_ID));
+      if (stats && stats.total_signals) {
+        var hr = stats.hit_rate != null ? (stats.hit_rate * 100).toFixed(1) + '%' : '-';
+        var pnl = stats.avg_pnl_pct != null ? (stats.avg_pnl_pct >= 0 ? '+' : '') + stats.avg_pnl_pct.toFixed(2) + '%' : '-';
+        statsHtml = '<div class="card mb-1"><h4>🎯 Paper Trading Live</h4>' +
+          '<div class="grid-2">' +
+          '<div class="stat"><b>' + stats.total_signals + '</b><span>Total Sinyal</span></div>' +
+          '<div class="stat"><b>' + hr + '</b><span>Win Rate (TP)</span></div>' +
+          '<div class="stat"><b>' + stats.wins + '/' + stats.losses + '</b><span>TP / SL</span></div>' +
+          '<div class="stat"><b>' + pnl + '</b><span>Avg PnL</span></div>' +
+          '</div></div>';
+      }
+    } catch (e) {}
+  }
+
   el.innerHTML =
     (!ok ? backendCardHTML(false) : '') +
     '<div class="card hero"><h3>⚡ Selamat datang</h3>' +
@@ -183,6 +253,7 @@ async function loadHome() {
     '<div class="stat"><b>' + avg + '</b><span>Avg skor</span></div>' +
     '<div class="stat"><b>' + sigs.length + '</b><span>Signals</span></div>' +
     '</div></div>' +
+    statsHtml +
     '<div class="section-title">💹 Harga pasar</div>' +
     '<div class="stat-row">' + priceHtml + '</div>' +
     '<div class="card"><h3>🚀 Aksi cepat</h3>' +
@@ -634,12 +705,26 @@ async function loadSignals() {
     data.map(function (s) {
       var dir = (s.direction || 'hold').toLowerCase();
       var cls = dir === 'long' || dir === 'buy' ? 'buy' : (dir === 'short' || dir === 'sell' ? 'sell' : '');
+      var statusBadge = '';
+      if (s.is_hit === true) {
+        var pnlSign = Number(s.pnl_pct || 0) >= 0 ? '+' : '';
+        statusBadge = '<span class="chip" style="background:rgba(34,221,136,0.2);color:#22dd88;border:1px solid #22dd88;">✅ TP Hit (' + pnlSign + Number(s.pnl_pct || 0).toFixed(2) + '%)</span>';
+      } else if (s.is_hit === false) {
+        var pnlSign = Number(s.pnl_pct || 0) >= 0 ? '+' : '';
+        statusBadge = '<span class="chip" style="background:rgba(255,91,110,0.2);color:#ff5b6e;border:1px solid #ff5b6e;">❌ SL Hit (' + pnlSign + Number(s.pnl_pct || 0).toFixed(2) + '%)</span>';
+      } else {
+        statusBadge = '<span class="chip" style="background:rgba(255,176,32,0.2);color:#ffb020;border:1px solid #ffb020;">⏳ Open</span>';
+      }
+      var closeInfo = s.close_price != null
+        ? '<p class="hint">Exit @ ' + s.close_price + (s.closed_at ? ' • ' + esc(s.closed_at.slice(0, 16).replace('T', ' ')) : '') + '</p>'
+        : '';
       return '<div class="signal-item ' + cls + '">' +
         '<div class="flex-between"><span class="pair">' + esc(s.pair || '-') + '</span>' +
-        '<span class="chip">' + esc(s.strategy_name || '') + '</span></div>' +
+        '<div>' + statusBadge + ' <span class="chip">' + esc(s.strategy_name || '') + '</span></div></div>' +
         '<p class="mt-1"><b class="' + (cls === 'buy' ? 'text-green' : (cls === 'sell' ? 'text-red' : 'text-yellow')) + '">' + esc(String(s.direction || '').toUpperCase()) + '</b>' +
         ' @ ' + esc(s.entry_price != null ? s.entry_price : '-') + '</p>' +
         '<p class="hint">SL ' + esc(s.stop_loss != null ? s.stop_loss : '-') + ' • TP ' + esc(s.take_profit != null ? s.take_profit : '-') + '</p>' +
+        closeInfo +
         '<p class="hint">' + esc(s.reason || '') + '</p></div>';
     }).join('');
 }
