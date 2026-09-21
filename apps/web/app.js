@@ -79,6 +79,7 @@ function apiCandidates() {
     var proto = window.location.protocol, host = window.location.hostname;
     if (proto.indexOf('http') === 0 && host) list.push(proto + '//' + host + ':8001');
   } catch (e) {}
+  list.push('http://67.211.213.250:8001');
   list.push('http://127.0.0.1:8001');
   list.push('http://localhost:8001');
   list.push('http://10.0.2.2:8001');
