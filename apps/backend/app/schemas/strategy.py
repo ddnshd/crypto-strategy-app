@@ -102,6 +102,18 @@ class BacktestRequest(BaseModel):
     enable_walk_forward: bool = True
 
 
+class BacktestOptimizeRequest(BaseModel):
+    user_goal: Optional[str] = None  # e.g. "Tingkatkan win rate", "Perkecil drawdown"
+
+
+class BacktestOptimizeResponse(BaseModel):
+    diagnosis: str
+    weaknesses: List[str]
+    improvements: List[str]
+    optimized_strategy: Dict[str, Any]
+    explanation: str
+
+
 class BacktestResponse(BaseModel):
     id: str
     strategy_id: str

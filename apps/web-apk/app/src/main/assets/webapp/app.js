@@ -712,9 +712,137 @@ function showBacktestData(res) {
     }
     h += '</details></div>';
   }
+
+  // AI Strategy Doctor & Optimizer Section
+  h += '<div class="card accent mt-1" id="ai-opt-card">' +
+    '<div class="flex-between"><h3>🤖 AI Strategy Doctor &amp; Optimizer</h3>' +
+    '<span class="chip" style="background:#5b5bff;color:#fff;">AI Engine</span></div>' +
+    '<p class="hint">Analisis titik kegagalan transaksi, deteksi kelemahan rules, dan susun perbaikan strategi secara otomatis.</p>' +
+    '<div class="mt-1"><label class="label">Target Optimasi</label>' +
+    '<select id="ai-opt-goal">' +
+    '<option value="Umum: Tingkatkan skor, profit factor, dan kurangi risiko">🎯 Umum: Tingkatkan Skor &amp; Profit</option>' +
+    '<option value="Fokus tingkatkan Win Rate dan kurangi false signal">🎯 Tingkatkan Win Rate (Filter Lebih Ketat)</option>' +
+    '<option value="Fokus perkecil Maximum Drawdown dan amankan modal">🛡️ Perkecil Drawdown (Risiko Rendah)</option>' +
+    '<option value="Fokus perbesar rasio Risk:Reward minimal 1:2">⚖️ Maksimalkan Risk:Reward (R:R)</option>' +
+    '<option value="Fokus kurangi overtrading dengan filter tren">📉 Kurangi Overtrading (Hanya Tren Kuat)</option>' +
+    '</select></div>' +
+    '<button class="btn btn-primary mt-1" onclick="runAiOptimize(\'' + res.id + '\')">✨ Analisis &amp; Optimalkan Strategi</button>' +
+    '<div id="ai-opt-result" class="mt-1"></div></div>';
+
   r.innerHTML = h;
   drawEquity(res.equity_curve || []);
 }
+
+window.runAiOptimize = async function (bid) {
+  var box = document.getElementById('ai-opt-result');
+  if (!box) return;
+  var goal = (document.getElementById('ai-opt-goal') || {}).value || '';
+  box.innerHTML = '<div class="card" style="background:rgba(91,91,255,0.08);border:1px solid rgba(91,91,255,0.25);">' +
+    '<div class="spinner" style="width:28px;height:28px;margin:10px auto;"></div>' +
+    '<p style="text-align:center;font-size:13px;color:#a5a5db;">🤖 AI sedang menelaah data transaksi, mendeteksi false signal &amp; merancang strategi baru...</p>' +
+    '</div>';
+
+  try {
+    var data = await api('/api/v1/backtest/' + bid + '/ai-optimize', 'POST', { user_goal: goal });
+    state.lastOptimizedStrategy = data.optimized_strategy;
+    renderAiOptimizeResult(data, bid);
+  } catch (e) {
+    box.innerHTML = '<div class="card warn"><h4>❌ Gagal Analisis AI</h4><p class="hint">' + esc(e.message) + '</p>' +
+      '<button class="btn btn-sm btn-secondary mt-1" onclick="runAiOptimize(\'' + bid + '\')">🔄 Coba lagi</button></div>';
+    showToast('Gagal: ' + e.message, 'error');
+  }
+};
+
+function renderAiOptimizeResult(data, bid) {
+  var box = document.getElementById('ai-opt-result');
+  if (!box) return;
+
+  var weaknessesHtml = (data.weaknesses || []).map(function (w) {
+    return '<li style="margin-bottom:6px;">⚠️ ' + esc(w) + '</li>';
+  }).join('');
+
+  var improvementsHtml = (data.improvements || []).map(function (imp) {
+    return '<li style="margin-bottom:6px;">✅ ' + esc(imp) + '</li>';
+  }).join('');
+
+  var opt = data.optimized_strategy || {};
+  var exit = opt.exit_conditions || {};
+
+  var html = '<div class="card good" style="margin-top:12px;">' +
+    '<h4>📋 Diagnosa Performa Backtest</h4>' +
+    '<p style="font-size:13px;line-height:1.6;margin-top:6px;color:#d5d8f7;">' + esc(data.diagnosis || '-') + '</p>' +
+    '</div>';
+
+  if (weaknessesHtml) {
+    html += '<div class="card warn" style="margin-top:10px;">' +
+      '<h4>🔍 Titik Kelemahan Terdeteksi</h4>' +
+      '<ul style="list-style:none;padding-left:0;font-size:13px;margin-top:8px;color:#ffd9a0;">' + weaknessesHtml + '</ul>' +
+      '</div>';
+  }
+
+  if (improvementsHtml) {
+    html += '<div class="card good" style="margin-top:10px;">' +
+      '<h4>🛠️ Solusi &amp; Penyempurnaan AI</h4>' +
+      '<ul style="list-style:none;padding-left:0;font-size:13px;margin-top:8px;color:#a0f0c0;">' + improvementsHtml + '</ul>' +
+      '</div>';
+  }
+
+  html += '<div class="card accent" style="margin-top:10px;">' +
+    '<div class="flex-between"><h4>🚀 Strategi Versi Baru</h4>' +
+    '<span class="chip">' + esc(opt.pair || 'Crypto') + ' • ' + esc(opt.timeframe || '1h') + '</span></div>' +
+    '<p><b>' + esc(opt.name || 'Strategi Optimasi') + '</b></p>' +
+    '<div class="kv"><span>Take Profit</span><b>+' + (exit.take_profit_pct || '-') + '%</b></div>' +
+    '<div class="kv"><span>Stop Loss</span><b>-' + (exit.stop_loss_pct || '-') + '%</b></div>' +
+    (exit.trailing_stop_pct ? '<div class="kv"><span>Trailing Stop</span><b>' + exit.trailing_stop_pct + '%</b></div>' : '') +
+    (opt.notes ? '<p class="hint mt-1">' + esc(opt.notes) + '</p>' : '') +
+    '<details class="mt-1"><summary class="hint">Lihat JSON Definisi Baru</summary>' +
+    '<pre class="json">' + esc(JSON.stringify(opt, null, 2)) + '</pre></details>' +
+    '<div class="btn-row mt-1">' +
+    '<button class="btn btn-primary" onclick="saveOptimizedStrategy(false)">💾 Simpan ke Library</button>' +
+    '<button class="btn btn-secondary" onclick="saveOptimizedStrategy(true)">📊 Simpan &amp; Backtest</button>' +
+    '</div></div>';
+
+  box.innerHTML = html;
+}
+
+window.saveOptimizedStrategy = async function (andBacktest) {
+  if (!state.lastOptimizedStrategy) {
+    showToast('Tidak ada strategi untuk disimpan', 'error');
+    return;
+  }
+  var opt = state.lastOptimizedStrategy;
+  showLoading();
+  try {
+    var saved = await api('/api/v1/strategies', 'POST', {
+      name: opt.name || 'Strategi Optimasi AI',
+      description: opt.notes || 'Disempurnakan oleh AI Strategy Doctor',
+      style: opt.style || 'intraday',
+      pair: opt.pair || 'BTC/USDT',
+      timeframe: opt.timeframe || '1h',
+      definition: opt,
+      device_id: DEVICE_ID
+    });
+    showToast('Strategi versi baru tersimpan!', 'success');
+    await loadLibrary();
+    if (andBacktest) {
+      goTab('backtest');
+      setTimeout(function () {
+        var sel = document.getElementById('bt-id');
+        if (sel) {
+          sel.value = saved.id;
+          if (typeof loadHistory === 'function') loadHistory(saved.id);
+        }
+        runBacktest(saved.id);
+      }, 400);
+    } else {
+      goTab('library');
+      showDetail(saved.id);
+    }
+  } catch (e) {
+    showToast('Gagal simpan: ' + e.message, 'error');
+  }
+  hideLoading();
+};
 function drawEquity(curve) {
   var c = document.getElementById('eqchart');
   if (!c || !curve.length) return;

@@ -6,8 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.deps import get_db
 from app.models.strategy import Strategy, BacktestResult
-from app.schemas.strategy import BacktestRequest, BacktestResponse
+from app.schemas.strategy import (
+    BacktestRequest, BacktestResponse,
+    BacktestOptimizeRequest, BacktestOptimizeResponse
+)
 from app.services.backtester import Backtester
+from app.services.ai_client import AIClient
 
 
 def _json_safe(obj):
@@ -147,3 +151,73 @@ async def get_backtest_result(backtest_id: str, db: AsyncSession = Depends(get_d
     if not backtest:
         return {"id": backtest_id, "status": "running", "message": "Backtest masih dijalankan..."}
     return backtest
+
+
+@router.post("/{backtest_id}/ai-optimize", response_model=BacktestOptimizeResponse)
+async def ai_optimize_backtest(
+    backtest_id: str,
+    request: BacktestOptimizeRequest = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyze backtest result metrics using AI and generate an optimized strategy definition."""
+    result = await db.execute(
+        select(BacktestResult).where(BacktestResult.id == backtest_id)
+    )
+    backtest = result.scalar_one_or_none()
+    if not backtest:
+        raise HTTPException(status_code=404, detail="Hasil backtest tidak ditemukan")
+
+    strat_result = await db.execute(
+        select(Strategy).where(Strategy.id == backtest.strategy_id)
+    )
+    strategy = strat_result.scalar_one_or_none()
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategi tidak ditemukan")
+
+    exit_reasons = {}
+    for t in (backtest.trade_log or []):
+        if isinstance(t, dict):
+            r = t.get("exit_reason", "unknown")
+            exit_reasons[r] = exit_reasons.get(r, 0) + 1
+
+    wf = backtest.walk_forward or {}
+    wf_deg = wf.get("degradation_pct", "N/A")
+    wf_cons = "Konsisten" if isinstance(wf_deg, (int, float)) and wf_deg < 10 else "Overfitting" if isinstance(wf_deg, (int, float)) and wf_deg > 25 else "Cukup Konsisten"
+
+    backtest_summary = {
+        "pair": backtest.pair,
+        "timeframe": backtest.timeframe,
+        "start_date": backtest.start_date,
+        "end_date": backtest.end_date,
+        "total_trades": backtest.total_trades,
+        "winning_trades": backtest.winning_trades,
+        "losing_trades": backtest.losing_trades,
+        "win_rate_pct": round(float(backtest.win_rate or 0) * 100, 1),
+        "profit_factor": round(float(backtest.profit_factor or 0), 2),
+        "total_return_pct": round(float(backtest.total_return or 0) * 100, 1),
+        "max_drawdown_pct": round(float(backtest.max_drawdown or 0) * 100, 1),
+        "sharpe_ratio": round(float(backtest.sharpe_ratio or 0), 2),
+        "avg_rr": round(float(backtest.avg_rr or 0), 2),
+        "total_commission": round(float(backtest.total_commission or 0), 2),
+        "score": round(float(backtest.score or 0), 1),
+        "exit_reasons": exit_reasons,
+        "wf_degradation": wf_deg,
+        "wf_consistency": wf_cons,
+    }
+
+    user_goal = request.user_goal if request else None
+    ai_client = AIClient()
+    try:
+        analysis_result = await ai_client.analyze_and_optimize_backtest(
+            strategy_name=strategy.name,
+            strategy_def=strategy.definition,
+            backtest_summary=backtest_summary,
+            user_goal=user_goal,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail=str(ve))
+    except Exception as e:
+        logger.error(f"AI backtest optimize error: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Gagal menghubungi AI untuk analisis: {e}")
+
+    return BacktestOptimizeResponse(**analysis_result)
