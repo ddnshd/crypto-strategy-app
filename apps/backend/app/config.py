@@ -16,7 +16,7 @@ class Settings:
     # Database — always absolute to backend directory
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        f"sqlite+aiosqlite:///{BACKEND_DIR}/cryptostrategy.db"
+        f"sqlite+aiosqlite:///{BACKEND_DIR.as_posix()}/cryptostrategy.db"
     )
 
     # Redis
