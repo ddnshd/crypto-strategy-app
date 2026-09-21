@@ -25,9 +25,14 @@ TIMEFRAME_MAP = {
 }
 
 
+FALLBACK_EXCHANGES = ["binance", "binanceus", "okx", "gate", "kraken"]
+
+
 class DataFetcher:
+    _active_exchange_id: Optional[str] = None
+
     def __init__(self, exchange_id: str = None):
-        self.exchange_id = exchange_id or settings.DEFAULT_EXCHANGE
+        self.exchange_id = exchange_id or DataFetcher._active_exchange_id or settings.DEFAULT_EXCHANGE
         self._exchange = None
 
     async def _get_exchange(self) -> ccxt.Exchange:
@@ -39,9 +44,24 @@ class DataFetcher:
             })
         return self._exchange
 
+    async def _switch_exchange(self, failed_id: str):
+        """Switch to next working exchange if current one is geographically restricted."""
+        await self.close()
+        candidates = [e for e in FALLBACK_EXCHANGES if e != failed_id]
+        if candidates:
+            next_ex = candidates[0]
+            logger.warning(f"Exchange '{failed_id}' restricted/unavailable. Auto-switching to '{next_ex}'...")
+            self.exchange_id = next_ex
+            DataFetcher._active_exchange_id = next_ex
+            return await self._get_exchange()
+        raise RuntimeError(f"All fallback exchanges exhausted after {failed_id} failure")
+
     async def close(self):
         if self._exchange:
-            await self._exchange.close()
+            try:
+                await self._exchange.close()
+            except Exception:
+                pass
             self._exchange = None
 
     async def fetch_ohlcv(
@@ -56,99 +76,135 @@ class DataFetcher:
         Fetch OHLCV data and return as DataFrame.
         Columns: timestamp, open, high, low, close, volume
         """
-        exchange = await self._get_exchange()
+        candidates = [self.exchange_id] + [e for e in FALLBACK_EXCHANGES if e != self.exchange_id]
 
-        since = None
-        if start_date:
-            dt = datetime.strptime(start_date, "%Y-%m-%d")
-            since = int(dt.timestamp() * 1000)
-        elif not since:
-            # Default: fetch enough bars based on timeframe
-            tf_minutes = TIMEFRAME_MAP.get(timeframe, 60)
-            days_back = max(30, (limit * tf_minutes) // 1440 + 1)
-            since = int((datetime.utcnow() - timedelta(days=days_back)).timestamp() * 1000)
+        for current_candidate in candidates:
+            try:
+                self.exchange_id = current_candidate
+                exchange = await self._get_exchange()
 
-        all_ohlcv = []
-        current_since = since
+                since = None
+                if start_date:
+                    dt = datetime.strptime(start_date, "%Y-%m-%d")
+                    since = int(dt.timestamp() * 1000)
+                elif not since:
+                    tf_minutes = TIMEFRAME_MAP.get(timeframe, 60)
+                    days_back = max(30, (limit * tf_minutes) // 1440 + 1)
+                    since = int((datetime.utcnow() - timedelta(days=days_back)).timestamp() * 1000)
 
-        try:
-            while True:
-                ohlcv = await exchange.fetch_ohlcv(
-                    pair, timeframe, since=current_since, limit=1000
-                )
-                if not ohlcv:
-                    break
+                all_ohlcv = []
+                current_since = since
 
-                all_ohlcv.extend(ohlcv)
-
-                # Check if we've reached end_date
-                if end_date:
-                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                    last_ts = ohlcv[-1][0] / 1000
-                    if datetime.utcfromtimestamp(last_ts) >= end_dt:
+                while True:
+                    ohlcv = await exchange.fetch_ohlcv(
+                        pair, timeframe, since=current_since, limit=1000
+                    )
+                    if not ohlcv:
                         break
 
-                # If fewer bars than limit, we've got everything
-                if len(ohlcv) < 1000:
-                    break
+                    all_ohlcv.extend(ohlcv)
 
-                # Move to next batch
-                current_since = ohlcv[-1][0] + 1
+                    if end_date:
+                        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                        last_ts = ohlcv[-1][0] / 1000
+                        if datetime.utcfromtimestamp(last_ts) >= end_dt:
+                            break
 
-        except ccxt.NetworkError as e:
-            logger.error(f"Network error fetching {pair}: {e}")
-            raise
-        except ccxt.ExchangeError as e:
-            logger.error(f"Exchange error fetching {pair}: {e}")
-            raise
+                    if len(ohlcv) < 1000:
+                        break
 
-        if not all_ohlcv:
-            raise ValueError(f"No OHLCV data returned for {pair} {timeframe}")
+                    current_since = ohlcv[-1][0] + 1
 
-        df = pd.DataFrame(
-            all_ohlcv,
-            columns=["timestamp", "open", "high", "low", "close", "volume"]
-        )
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df = df.set_index("timestamp")
-        df = df.sort_index()
-        # Remove any overlapping/duplicate timestamps from pagination
-        df = df[~df.index.duplicated(keep="first")]
+                if all_ohlcv:
+                    DataFetcher._active_exchange_id = current_candidate
+                    df = pd.DataFrame(
+                        all_ohlcv,
+                        columns=["timestamp", "open", "high", "low", "close", "volume"]
+                    )
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                    df = df.set_index("timestamp")
+                    df = df.sort_index()
+                    df = df[~df.index.duplicated(keep="first")]
 
-        # Filter by end_date if specified (include full 23:59:59 of that date)
-        if end_date:
-            end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
-            df = df[df.index <= end_dt]
+                    if end_date:
+                        end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+                        df = df[df.index <= end_dt]
 
-        return df
+                    return df
+
+            except (ccxt.ExchangeNotAvailable, ccxt.AuthenticationError, ccxt.ExchangeError) as e:
+                err_str = str(e).lower()
+                if "451" in err_str or "restricted location" in err_str or "unavailable" in err_str:
+                    logger.warning(f"Exchange '{current_candidate}' restricted: {e}. Trying fallback...")
+                    await self.close()
+                    continue
+                logger.error(f"Exchange error fetching {pair} on {current_candidate}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error fetching {pair} on {current_candidate}: {e}")
+                raise
+
+        raise ValueError(f"No OHLCV data returned for {pair} {timeframe} across all available exchanges")
 
     async def get_current_price(self, pair: str) -> float:
-        """Get the latest ticker price."""
-        exchange = await self._get_exchange()
-        ticker = await exchange.fetch_ticker(pair)
-        return float(ticker["last"])
+        """Get the latest ticker price with automatic fallback."""
+        candidates = [self.exchange_id] + [e for e in FALLBACK_EXCHANGES if e != self.exchange_id]
+        for current_candidate in candidates:
+            try:
+                self.exchange_id = current_candidate
+                exchange = await self._get_exchange()
+                ticker = await exchange.fetch_ticker(pair)
+                DataFetcher._active_exchange_id = current_candidate
+                return float(ticker["last"])
+            except (ccxt.ExchangeNotAvailable, ccxt.AuthenticationError, ccxt.ExchangeError) as e:
+                err_str = str(e).lower()
+                if "451" in err_str or "restricted location" in err_str or "unavailable" in err_str:
+                    await self.close()
+                    continue
+                raise
+        raise RuntimeError(f"Could not fetch price for {pair} on any exchange")
 
     async def get_latest_ohlcv(self, pair: str, timeframe: str, bars: int = 200) -> pd.DataFrame:
-        """Get the latest N bars of OHLCV data."""
-        exchange = await self._get_exchange()
-        ohlcv = await exchange.fetch_ohlcv(pair, timeframe, limit=bars)
-
-        if not ohlcv:
-            raise ValueError(f"No data for {pair} {timeframe}")
-
-        df = pd.DataFrame(
-            ohlcv,
-            columns=["timestamp", "open", "high", "low", "close", "volume"]
-        )
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df = df.set_index("timestamp")
-        return df
+        """Get the latest N bars of OHLCV data with automatic fallback."""
+        candidates = [self.exchange_id] + [e for e in FALLBACK_EXCHANGES if e != self.exchange_id]
+        for current_candidate in candidates:
+            try:
+                self.exchange_id = current_candidate
+                exchange = await self._get_exchange()
+                ohlcv = await exchange.fetch_ohlcv(pair, timeframe, limit=bars)
+                if ohlcv:
+                    DataFetcher._active_exchange_id = current_candidate
+                    df = pd.DataFrame(
+                        ohlcv,
+                        columns=["timestamp", "open", "high", "low", "close", "volume"]
+                    )
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                    df = df.set_index("timestamp")
+                    return df
+            except (ccxt.ExchangeNotAvailable, ccxt.AuthenticationError, ccxt.ExchangeError) as e:
+                err_str = str(e).lower()
+                if "451" in err_str or "restricted location" in err_str or "unavailable" in err_str:
+                    await self.close()
+                    continue
+                raise
+        raise ValueError(f"No data for {pair} {timeframe} across all available exchanges")
 
     async def list_pairs(self, quote_currency: str = "USDT") -> list[str]:
         """List available trading pairs."""
-        exchange = await self._get_exchange()
-        await exchange.load_markets()
-        return [
-            symbol for symbol in exchange.symbols
-            if symbol.endswith(f"/{quote_currency}") and exchange.markets[symbol].get("active")
-        ]
+        candidates = [self.exchange_id] + [e for e in FALLBACK_EXCHANGES if e != self.exchange_id]
+        for current_candidate in candidates:
+            try:
+                self.exchange_id = current_candidate
+                exchange = await self._get_exchange()
+                await exchange.load_markets()
+                pairs = [
+                    symbol for symbol in exchange.symbols
+                    if symbol.endswith(f"/{quote_currency}") and exchange.markets[symbol].get("active")
+                ]
+                if pairs:
+                    DataFetcher._active_exchange_id = current_candidate
+                    return pairs
+            except Exception:
+                await self.close()
+                continue
+        return ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
