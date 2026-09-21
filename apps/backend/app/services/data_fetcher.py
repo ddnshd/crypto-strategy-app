@@ -112,10 +112,12 @@ class DataFetcher:
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df = df.set_index("timestamp")
         df = df.sort_index()
+        # Remove any overlapping/duplicate timestamps from pagination
+        df = df[~df.index.duplicated(keep="first")]
 
-        # Filter by end_date if specified
+        # Filter by end_date if specified (include full 23:59:59 of that date)
         if end_date:
-            end_dt = pd.Timestamp(end_date)
+            end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
             df = df[df.index <= end_dt]
 
         return df
