@@ -97,3 +97,11 @@ Agar backend menyala otomatis setiap kali Windows Server restart:
 * Akses Swagger UI di browser: `http://<IP-VPS-ANDA>:8001/docs`
 * Akses Health Endpoint: `http://<IP-VPS-ANDA>:8001/health`
 * Di aplikasi Web / Android APK, masuk ke menu **Settings** -> **Server Backend (VPS)**, masukkan `http://<IP-VPS-ANDA>:8001` dan klik **Simpan & Hubungkan**.
+
+---
+
+## 7. Log & Rotasi
+* File log: `cryptostrategy-backend.log` (stdout) + `cryptostrategy-backend.err.log` (stderr, PowerShell).
+* Setiap `start` otomatis: jika log >= 5MB, dirotasi ke `.1` / `.2` / `.3` (yang lama dihapus). Mode append (`>>`) sehingga riwayat tidak hilang.
+* Lihat log: `server.bat logs` atau `.\server.ps1 -Action logs` (50 baris terakhir + 20 baris error).
+* Jika log tetap bengkak dalam satu sesi panjang, restart berkala: `server.bat restart`.

@@ -7,6 +7,23 @@ param (
 $BackendDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $BackendDir
 $LogFile = Join-Path $BackendDir "cryptostrategy-backend.log"
+$ErrFile = Join-Path $BackendDir "cryptostrategy-backend.err.log"
+$MaxLogSize = 5MB
+
+function Rotate-Log {
+    param ([string]$Path)
+    if (Test-Path $Path) {
+        $size = (Get-Item $Path).Length
+        if ($size -ge $MaxLogSize) {
+            Write-Host "[INFO] Merotasi log $Path ($size bytes)..." -ForegroundColor Yellow
+            $old3 = "$Path.3"; $old2 = "$Path.2"; $old1 = "$Path.1"
+            if (Test-Path $old3) { Remove-Item $old3 -Force }
+            if (Test-Path $old2) { Move-Item $old2 $old3 -Force }
+            if (Test-Path $old1) { Move-Item $old1 $old2 -Force }
+            Move-Item $Path $old1 -Force
+        }
+    }
+}
 
 function Test-PortOpen {
     param ([int]$p)
@@ -31,13 +48,19 @@ switch ($Action) {
             return
         }
         Write-Host "[INFO] Menjalankan Crypto Strategy API di port $Port..." -ForegroundColor Green
-        
+
+        # Start-Process menimpa file target, jadi rotasi dulu agar tidak bengkak
+        Rotate-Log -Path $LogFile
+        Rotate-Log -Path $ErrFile
+
         $venvActivate = Join-Path $BackendDir "venv\Scripts\Activate.ps1"
         if (Test-Path $venvActivate) {
             & $venvActivate
         }
 
-        $proc = Start-Process -FilePath "python" -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port $Port" -RedirectStandardOutput $LogFile -RedirectStandardError $LogFile -PassThru -WindowStyle Hidden
+        # stdout -> .log, stderr -> .err.log (file terpisah agar tidak saling menimpa)
+        "===== $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') starting on port $Port =====" | Out-File $LogFile -Encoding utf8
+        $proc = Start-Process -FilePath "python" -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port $Port" -RedirectStandardOutput $LogFile -RedirectStandardError $ErrFile -PassThru -WindowStyle Hidden
         Start-Sleep -Seconds 3
 
         if (Test-PortOpen -p $Port) {
@@ -85,9 +108,13 @@ switch ($Action) {
 
     "logs" {
         if (Test-Path $LogFile) {
-            Get-Content $LogFile -Tail 30 -Wait
+            Get-Content $LogFile -Tail 50
         } else {
             Write-Host "[INFO] File log belum ditemukan: $LogFile" -ForegroundColor Yellow
+        }
+        if (Test-Path $ErrFile) {
+            Write-Host "--- stderr ($ErrFile) ---" -ForegroundColor Yellow
+            Get-Content $ErrFile -Tail 20
         }
     }
 

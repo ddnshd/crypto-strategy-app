@@ -7,6 +7,20 @@ TMP_DIR="${TMPDIR:-/tmp}"
 LOG_FILE="$TMP_DIR/cryptostrategy-backend.log"
 PID_FILE="$TMP_DIR/cryptostrategy-backend.pid"
 PORT=${PORT:-8001}
+MAX_LOG_SIZE=${MAX_LOG_SIZE:-5242880}  # 5MB — rotate keeping .1/.2/.3
+
+rotate_logs() {
+  if [ -f "$LOG_FILE" ]; then
+    size=$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$size" -ge "$MAX_LOG_SIZE" ]; then
+      rm -f "${LOG_FILE}.3"
+      [ -f "${LOG_FILE}.2" ] && mv "${LOG_FILE}.2" "${LOG_FILE}.3"
+      [ -f "${LOG_FILE}.1" ] && mv "${LOG_FILE}.1" "${LOG_FILE}.2"
+      mv "$LOG_FILE" "${LOG_FILE}.1"
+      echo "Rotated logs (was ${size} bytes)"
+    fi
+  fi
+}
 
 cd "$BACKEND_DIR"
 
@@ -16,9 +30,11 @@ case "$1" in
       echo "Backend already running (PID: $(cat $PID_FILE))"
       exit 0
     fi
+    rotate_logs
     echo "Starting Crypto Strategy API on port $PORT..."
+    echo "===== $(date '+%Y-%m-%d %H:%M:%S') starting on port $PORT =====" >> "$LOG_FILE"
     setsid python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT \
-      < /dev/null > "$LOG_FILE" 2>&1 &
+      < /dev/null >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     sleep 3
     if kill -0 "$(cat $PID_FILE)" 2>/dev/null; then
@@ -54,10 +70,13 @@ case "$1" in
     fi
     ;;
   logs)
-    tail -f "$LOG_FILE"
+    tail -n 100 -f "$LOG_FILE"
+    ;;
+  logs-all)
+    tail -n 100 "${LOG_FILE}.3" "${LOG_FILE}.2" "${LOG_FILE}.1" "$LOG_FILE" 2>/dev/null
     ;;
   *)
-    echo "Usage: $0 {start|stop|restart|status|logs}"
+    echo "Usage: $0 {start|stop|restart|status|logs|logs-all}"
     exit 1
     ;;
 esac
