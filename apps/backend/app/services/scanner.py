@@ -272,6 +272,8 @@ class SignalScanner:
                                 break
                         except Exception as e:
                             logger.warning(f"Filter eval error in scanner: {e}")
+                            signal_triggered = False
+                            break
 
                 # Update last_checked_at regardless
                 await session.execute(

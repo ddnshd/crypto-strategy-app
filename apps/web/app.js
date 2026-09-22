@@ -948,13 +948,19 @@ function backendCardHTML(withRestart) {
       '<button class="btn btn-secondary" onclick="openTermuxApp()">📱 Buka Termux</button></div>';
   }
   if (!hasBridge()) {
-    h += '<pre class="json">' + cmd + '</pre><p class="hint">Jalankan perintah di atas di Termux, lalu tekan Coba lagi.</p>';
+    h += '<pre class="json">' + cmd + '</pre><p class="hint">Jalankan perintah di atas di Termux/Server, lalu tekan Coba lagi.</p>';
   } else {
     h += '<div id="backend-manual" class="hidden"><pre class="json">' + cmd + '</pre>' +
       '<div class="btn-row"><button class="btn btn-secondary" onclick="openTermuxApp()">📱 Buka Termux</button>' +
       '<button class="btn btn-secondary" onclick="copyBackendCmd()">📋 Salin</button></div>' +
       '<p class="hint">Kalau otomatis gagal, jalankan manual di Termux.</p></div>';
   }
+  h += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.1)">' +
+    '<label class="label">🌐 Backend di VPS Windows Server / Remote:</label>' +
+    '<div style="display:flex;gap:8px;margin-top:4px">' +
+    '<input class="input" id="vps-backend-url" placeholder="http://ip-vps:8001" value="' + esc(API_BASE || '') + '" style="margin-bottom:0;flex:1">' +
+    '<button class="btn btn-primary" style="white-space:nowrap" onclick="setCustomBackendUrl(document.getElementById(\'vps-backend-url\').value)">Hubungkan</button>' +
+    '</div><p class="hint" style="margin-top:4px">Ketik IP atau Domain VPS Windows Server lalu klik Hubungkan.</p></div>';
   return h + '</div>';
 }
 window.tryStartBackend = async function (action) {
@@ -1036,7 +1042,16 @@ async function loadSettings() {
     '<div class="kv"><span>API key</span><b>' + esc(cfg.api_key || '-') + '</b></div>' +
     '<div class="btn-row"><button class="btn btn-secondary" onclick="copyDiag()">📋 Salin diagnostik</button>' +
     '<button class="btn btn-secondary" onclick="forceRefreshSettings()">🔄 Muat ulang dari backend</button></div></div>' +
-    '<div class="card"><h3>🔌 Koneksi</h3>' +
+    '<div class="card"><h3>🖥️ Server Backend (VPS Windows Server / Lokal)</h3>' +
+    '<p>Alamat server API backend. Jika backend berada di VPS Windows Server, masukkan alamat IP VPS dan port (contoh: <code>http://123.45.67.89:8001</code>).</p>' +
+    '<label class="label">URL Backend API</label>' +
+    '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+    '<input class="input" id="settings-backend-url" value="' + esc(API_BASE || '') + '" placeholder="http://ip-vps:8001" style="margin-bottom:0;flex:1">' +
+    '<button class="btn btn-primary" style="white-space:nowrap" onclick="setCustomBackendUrl(document.getElementById(\'settings-backend-url\').value)">Hubungkan</button>' +
+    '</div>' +
+    '<div class="btn-row"><button class="btn btn-secondary" onclick="resetBackendUrl()">Kembalikan Default</button></div>' +
+    '<p class="hint">Pastikan port 8001 diizinkan di Windows Defender Firewall pada VPS Windows Server.</p></div>' +
+    '<div class="card"><h3>🔌 Koneksi LLM / AI</h3>' +
     '<label class="label">Base URL</label>' +
     '<input class="input" id="ai-base-url" value="' + esc(cfg.base_url || '') + '" placeholder="https://.../v1" inputmode="url">' +
     '<label class="label">API key baru (kosongkan = tidak diubah)</label>' +
@@ -1114,6 +1129,50 @@ window.copyDiag = function () {
       function () { prompt('Salin info ini:', t); }
     );
   } else { prompt('Salin info ini:', t); }
+};
+
+window.setCustomBackendUrl = async function (url) {
+  url = (url || '').trim();
+  if (!url) {
+    showToast('Masukkan URL backend terlebih dahulu', 'error');
+    return;
+  }
+  url = url.replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(url)) {
+    url = 'http://' + url;
+  }
+  showLoading();
+  showToast('Menghubungkan ke ' + url + '...', '');
+  try {
+    var r = await fetchTimeout(url + '/health', {}, 6000);
+    if (r.ok) {
+      API_BASE = url;
+      localStorage.setItem('cs_api_base', API_BASE);
+      LAST_ERROR = '';
+      ONLINE = true;
+      setConn(true);
+      hideLoading();
+      showToast('Berhasil terhubung ke ' + url + '! 🎉', 'success');
+      connectWs();
+      await loadTab(state.activeTab || 'home');
+      return;
+    }
+    hideLoading();
+    showToast('Server merespon error HTTP ' + r.status, 'error');
+  } catch (e) {
+    hideLoading();
+    LAST_ERROR = (e.name === 'AbortError' ? 'timeout' : e.message) + ' @ ' + url;
+    showToast('Gagal terhubung ke ' + url, 'error');
+  }
+};
+
+window.resetBackendUrl = async function () {
+  localStorage.removeItem('cs_api_base');
+  API_BASE = '';
+  showToast('Reset URL backend, mendeteksi ulang...', '');
+  await detectApi();
+  await checkConnection();
+  await loadTab(state.activeTab || 'home');
 };
 
 window.saveAISettings = async function () {

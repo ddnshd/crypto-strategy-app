@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from alembic import context
 from app.config import settings
 from app.core.database import Base
-from app.models import strategy, signal  # noqa: F401 — import all models
+from app.models.strategy import Strategy, BacktestResult, StrategyVersion, Signal, ActiveScanner  # noqa: F401 — import all models
 
 config = context.config
 if config.config_file_name is not None:

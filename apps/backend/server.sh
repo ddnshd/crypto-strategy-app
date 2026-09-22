@@ -1,10 +1,12 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # Start script for Crypto Strategy API backend
 
-BACKEND_DIR="/data/data/com.termux/files/home/crypto-strategy-app/apps/backend"
-LOG_FILE="/data/data/com.termux/files/usr/tmp/cryptostrategy-backend.log"
-PID_FILE="/data/data/com.termux/files/usr/tmp/cryptostrategy-backend.pid"
-PORT=8001
+BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMP_DIR="${TMPDIR:-/tmp}"
+[ ! -d "$TMP_DIR" ] && TMP_DIR="/tmp"
+LOG_FILE="$TMP_DIR/cryptostrategy-backend.log"
+PID_FILE="$TMP_DIR/cryptostrategy-backend.pid"
+PORT=${PORT:-8001}
 
 cd "$BACKEND_DIR"
 

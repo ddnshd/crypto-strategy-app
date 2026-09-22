@@ -166,11 +166,11 @@ def evaluate_condition(df: pd.DataFrame, cond: dict) -> pd.Series:
     Always safe: never throws exception, returns boolean series.
     """
     if not isinstance(cond, dict):
-        return pd.Series(True, index=df.index)
+        return pd.Series(False, index=df.index)
 
     indicator = cond.get("indicator", "")
     if not indicator or not isinstance(indicator, str):
-        return pd.Series(True, index=df.index)
+        return pd.Series(False, index=df.index)
 
     params = cond.get("params", {}) or {}
     operator = cond.get("operator", "")
@@ -227,7 +227,7 @@ def evaluate_condition(df: pd.DataFrame, cond: dict) -> pd.Series:
 
     except Exception as e:
         logger.warning(f"Error evaluating condition {cond}: {e}")
-        return pd.Series(True, index=df.index)
+        return pd.Series(False, index=df.index)
 
 
 def _get_indicator_series(df: pd.DataFrame, indicator: str, params: dict, operator: str = "", is_rhs: bool = False) -> pd.Series:
