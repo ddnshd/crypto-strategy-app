@@ -138,6 +138,7 @@ class SignalScanner:
             )
             scanners = result.scalars().all()
 
+        logger.info(f"Scanner sync: {len(scanners)} active scanners found")
         for scanner in scanners:
             scanner_id = scanner.id
             if scanner_id not in _scanner_tasks or _scanner_tasks[scanner_id].done():
@@ -149,6 +150,7 @@ class SignalScanner:
 
     async def _scan_strategy(self, scanner: ActiveScanner):
         """Scan a single strategy for signals."""
+        logger.info(f"Scanning strategy {scanner.strategy_id[:8]}... (scanner {scanner.id[:8]}...)")
         try:
             async with AsyncSessionLocal() as session:
                 strategy_result = await session.execute(
@@ -186,6 +188,12 @@ class SignalScanner:
                 # Prevent duplicate signal spam within 5 minutes
                 if scanner.last_signal_at:
                     if (datetime.utcnow() - scanner.last_signal_at).total_seconds() < 300:
+                        await session.execute(
+                            update(ActiveScanner)
+                            .where(ActiveScanner.id == scanner.id)
+                            .values(last_checked_at=datetime.utcnow())
+                        )
+                        await session.commit()
                         return
 
                 # Fetch latest OHLCV
@@ -194,14 +202,41 @@ class SignalScanner:
                     _fetchers[fetcher_key] = DataFetcher()
 
                 fetcher = _fetchers[fetcher_key]
-                df = await fetcher.get_latest_ohlcv(pair, timeframe, bars=200)
+                try:
+                    df = await fetcher.get_latest_ohlcv(pair, timeframe, bars=200)
+                except Exception as fetch_err:
+                    logger.warning(f"Scanner {scanner.id} fetch error for {pair}: {fetch_err}")
+                    await session.execute(
+                        update(ActiveScanner)
+                        .where(ActiveScanner.id == scanner.id)
+                        .values(last_checked_at=datetime.utcnow())
+                    )
+                    await session.commit()
+                    return
 
                 # Compute indicators
-                all_conditions = entry_conditions + filters
-                df = compute_indicators(df, all_conditions)
-                df = df.dropna()
+                try:
+                    all_conditions = entry_conditions + filters
+                    df = compute_indicators(df, all_conditions)
+                    df = df.dropna()
+                except Exception as ind_err:
+                    logger.warning(f"Scanner {scanner.id} indicator error for {pair}: {ind_err}")
+                    await session.execute(
+                        update(ActiveScanner)
+                        .where(ActiveScanner.id == scanner.id)
+                        .values(last_checked_at=datetime.utcnow())
+                    )
+                    await session.commit()
+                    return
 
                 if len(df) < 10:
+                    logger.info(f"Scanner {scanner.id[:8]}... {pair} insufficient data: {len(df)} bars")
+                    await session.execute(
+                        update(ActiveScanner)
+                        .where(ActiveScanner.id == scanner.id)
+                        .values(last_checked_at=datetime.utcnow())
+                    )
+                    await session.commit()
                     return
 
                 # Check last bar for signal
@@ -240,6 +275,7 @@ class SignalScanner:
                 await session.commit()
 
                 if not signal_triggered:
+                    logger.info(f"Scanner {scanner.id[:8]}... {pair} {direction} - conditions not met on latest bar")
                     return
 
                 # Build signal
