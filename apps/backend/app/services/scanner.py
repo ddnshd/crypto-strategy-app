@@ -204,6 +204,7 @@ class SignalScanner:
                 fetcher = _fetchers[fetcher_key]
                 try:
                     # Calculate needed bars based on longest indicator period
+                    all_conditions = entry_conditions + filters
                     max_period = 200
                     for cond in all_conditions:
                         p = cond.get("params", {}).get("period", 0)
@@ -223,7 +224,6 @@ class SignalScanner:
 
                 # Compute indicators
                 try:
-                    all_conditions = entry_conditions + filters
                     df = compute_indicators(df, all_conditions)
                     df = df.dropna()
                 except Exception as ind_err:
