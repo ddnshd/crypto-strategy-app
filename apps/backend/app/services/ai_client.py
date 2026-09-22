@@ -185,21 +185,29 @@ Konversikan ke format strategi JSON yang terstruktur."""
         strategy_def: dict,
         backtest_summary: dict,
         user_goal: str = None,
+        market_context: dict = None,
+        trade_samples: dict = None,
+        equity_insight: dict = None,
     ) -> dict:
-        """Analyze backtest performance metrics and generate an optimized strategy definition."""
+        """Analyze backtest with real market data + trade samples, generate optimized strategy.
+
+        market_context: OHLCV stats from the exchange for the same backtest period
+        trade_samples: worst losers / best winners extracted from the trade log
+        equity_insight: max-DD window + downsampled equity curve
+        """
         system_prompt = """Kamu adalah Senior Quantitative Trader & AI Strategy Optimization Specialist.
-Tugasmu adalah menganalisis hasil backtest strategi trading crypto secara analitis, mendiagnosa titik kegagalan (drawdown, overtrading, false signals, rasio R:R tidak seimbang, dll.), dan menyusun VERSI BARU STRATEGI YANG LEBIH OPTIMAL.
+Tugasmu adalah menganalisis hasil backtest strategi trading crypto berdasarkan DATA NYATA (metrik backtest, OHLCV pasar dari Binance, sampel transaksi konkret, dan kurva ekuitas), mendiagnosa titik kegagalan secara spesifik, lalu menyusun VERSI BARU STRATEGI YANG LEBIH OPTIMAL.
 
 Format output WAJIB JSON murni tanpa markdown pembungkus di luar JSON, dengan struktur persis seperti ini:
 {
-  "diagnosis": "Penjelasan mendalam mengapa performa backtest menghasilkan metrik tersebut (Bahasa Indonesia)...",
+  "diagnosis": "Penjelasan mendalam mengapa performa backtest menghasilkan metrik tersebut. WAJIB merujuk data konkret: kondisi pasar (trend/volatilitas), contoh trade kalah spesifik, dan jendela drawdown. Bahasa Indonesia.",
   "weaknesses": [
-    "Poin kelemahan 1 (misal: Stop Loss terlalu sempit kena noise)",
-    "Poin kelemahan 2 (misal: Kurang filter konfirmasi tren utama)"
+    "Poin kelemahan 1 yang didukung bukti data (misal: 6 dari 8 trade kalah exit SL saat ATR harian 2.1% — SL 1% terlalu sempit untuk volatilitas tsb)",
+    "Poin kelemahan 2 (misal: entry RSI<30 di downtrend kuat — 70% bar period dalam tren turun, contrarian entry gagal)"
   ],
   "improvements": [
-    "Perbaikan konkret 1 (misal: Tambah filter harga di atas EMA 200)",
-    "Perbaikan konkret 2 (misal: Naikkan Take Profit dari 2% menjadi 3.5%)"
+    "Perbaikan konkret 1 dengan angka (misal: Naikkan SL dari 1% menjadi max(1.5%, 1.2*ATR%) dan tambah filter EMA50>EMA200)",
+    "Perbaikan konkret 2 (misal: Batasi entry hanya saat volume > 1.2x rata-rata untuk konfirmasi)"
   ],
   "optimized_strategy": {
     "name": "Nama strategi (Versi Optimasi AI)",
@@ -226,40 +234,79 @@ Format output WAJIB JSON murni tanpa markdown pembungkus di luar JSON, dengan st
     "position_size_pct": 100,
     "notes": "Penjelasan ringkas logika versi optimasi"
   },
-  "explanation": "Penjelasan menyeluruh mengapa versi baru ini diproyeksikan lebih konsisten dan profitable..."
+  "explanation": "Penjelasan menyeluruh mengapa versi baru ini diproyeksikan lebih konsisten berdasarkan data yang diberikan..."
 }
+
+Cara kerja analisis (urut):
+1. Baca KONTEKS PASAR (OHLCV): trend, volatilitas ATR%, distribusi RSI, S/R, candle terakhir. Tentukan apakah parameter strategi lama cocok dengan kondisi pasar aktual.
+2. Baca SAMPEL TRADE (terburuk & terbaik): identifikasi pola exit_reason yang mendominasi kerugian (SL vs MaxBars vs Signal). Cek apakah SL/TP sebanding dengan ATR.
+3. Baca KURVA EKUITAS: period max drawdown — kaitkan dengan kondisi pasar di rentang tanggal tersebut bila memungkinkan.
+4. Susun diagnosis yang MERUJUK bukti angka/data di atas — jangan generalitas kosong.
+5. Hasilkan optimized_strategy: sesuaikan SL/TP dengan volatilitas (ATR), tambah/hapus filter agar selaras trend, pertahankan pair & timeframe.
 
 Aturan Penting:
 1. Hanya gunakan indikator valid: RSI, EMA, SMA, EMA_CROSS, SMA_CROSS, MACD, BBANDS, ATR, STOCH, VOLUME, VOLUME_SMA, PRICE.
 2. Operator valid: <, >, <=, >=, ==, cross_above, cross_below.
 3. filters harus berupa list dict kondisi indikator valid (jangan string teks deskripsi murni).
 4. Pertahankan pair & timeframe yang sama agar relevan dengan instrumen yang diuji.
-5. Berikan parameter angka yang rasional dan terbukti secara teknikal.
+5. Berikan parameter angka yang rasional — kalau ada data ATR, gunakan sebagai dasar SL/TP.
+6. Kalau market_context punya "error", abaikan bagian itu dan fokus ke metrik + trade samples.
+7. Jangan mengarang angka yang tidak ada di data yang diberikan.
 """
 
-        user_content = f"""Berikut adalah data strategi dan hasil backtestnya:
+        # ---- Build user content with all data blocks ----
+        parts = [
+            f"NAMA STRATEGI: {strategy_name}",
+            "",
+            "DEFINISI STRATEGI LAMA:",
+            json.dumps(strategy_def, indent=2, ensure_ascii=False),
+            "",
+            "HASIL METRIK BACKTEST:",
+            f"- Pasangan Aset & TF: {backtest_summary.get('pair')} ({backtest_summary.get('timeframe')})",
+            f"- Periode Pengujian: {backtest_summary.get('start_date')} s/d {backtest_summary.get('end_date')}",
+            f"- Total Transaksi: {backtest_summary.get('total_trades')} trade ({backtest_summary.get('winning_trades')} menang / {backtest_summary.get('losing_trades')} kalah)",
+            f"- Win Rate: {backtest_summary.get('win_rate_pct')}%",
+            f"- Profit Factor: {backtest_summary.get('profit_factor')}",
+            f"- Total Return: {backtest_summary.get('total_return_pct')}%",
+            f"- Maximum Drawdown: {backtest_summary.get('max_drawdown_pct')}%",
+            f"- Sharpe Ratio: {backtest_summary.get('sharpe_ratio')}",
+            f"- Average Risk:Reward: {backtest_summary.get('avg_rr')}",
+            f"- Total Komisi & Slippage: ${backtest_summary.get('total_commission')}",
+            f"- Skor Algoritma: {backtest_summary.get('score')}/100",
+            f"- Alasan Exit Breakdown: {json.dumps(backtest_summary.get('exit_reasons', {}), ensure_ascii=False)}",
+            f"- Walk-Forward Degradasi: {backtest_summary.get('wf_degradation')}% ({backtest_summary.get('wf_consistency')})",
+        ]
+        if user_goal:
+            parts.append(f"- Fokus Permintaan User: {user_goal}")
 
-NAMA STRATEGI: {strategy_name}
-DEFINISI STRATEGI LAMA:
-{json.dumps(strategy_def, indent=2, ensure_ascii=False)}
+        if market_context and not market_context.get("error"):
+            parts += [
+                "",
+                "KONTEKS PASAR (OHLCV dari Binance untuk periode backtest yang sama):",
+                json.dumps(market_context, indent=2, ensure_ascii=False),
+            ]
+        elif market_context and market_context.get("error"):
+            parts += ["", f"(Konteks pasar tidak tersedia: {market_context['error']})"]
 
-HASIL METRIK BACKTEST:
-- Pasangan Aset & TF: {backtest_summary.get('pair')} ({backtest_summary.get('timeframe')})
-- Periode Pengujian: {backtest_summary.get('start_date')} s/d {backtest_summary.get('end_date')}
-- Total Transaksi: {backtest_summary.get('total_trades')} trade ({backtest_summary.get('winning_trades')} menang / {backtest_summary.get('losing_trades')} kalah)
-- Win Rate: {backtest_summary.get('win_rate_pct')}%
-- Profit Factor: {backtest_summary.get('profit_factor')}
-- Total Return: {backtest_summary.get('total_return_pct')}%
-- Maximum Drawdown: {backtest_summary.get('max_drawdown_pct')}%
-- Sharpe Ratio: {backtest_summary.get('sharpe_ratio')}
-- Average Risk:Reward: {backtest_summary.get('avg_rr')}
-- Total Komisi & Slippage: ${backtest_summary.get('total_commission')}
-- Skor Algoritma: {backtest_summary.get('score')}/100
-- Alasan Exit Breakdown: {json.dumps(backtest_summary.get('exit_reasons', {}))}
-- Walk-Forward Degradasi: {backtest_summary.get('wf_degradation')}% ({backtest_summary.get('wf_consistency')})
-{f"- Fokus Permintaan User: {user_goal}" if user_goal else ""}
+        if trade_samples:
+            parts += [
+                "",
+                "SAMPEL TRANSAKSI (trade kalah terburuk & menang terbaik — analisis pola di sini):",
+                json.dumps(trade_samples, indent=2, ensure_ascii=False),
+            ]
 
-Silakan diagnosa dan hasilkan versi strategi yang telah disempurnakan (JSON)."""
+        if equity_insight:
+            parts += [
+                "",
+                "KURVA EKUITAS (ringkasan + sampel):",
+                json.dumps(equity_insight, indent=2, ensure_ascii=False),
+            ]
+
+        parts += [
+            "",
+            "Berdasarkan SEMUA data di atas, silakan diagnosa dan hasilkan versi strategi yang telah disempurnakan (JSON).",
+        ]
+        user_content = "\n".join(parts)
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -280,5 +327,4 @@ Silakan diagnosa dan hasilkan versi strategi yang telah disempurnakan (JSON)."""
             raise ValueError(f"AI gagal menghasilkan format JSON yang valid: {e}")
         except Exception as e:
             logger.error(f"AI backtest optimize error: {e}")
-            raise
             raise

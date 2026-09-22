@@ -12,6 +12,7 @@ from app.schemas.strategy import (
 )
 from app.services.backtester import Backtester
 from app.services.ai_client import AIClient
+from app.services.data_fetcher import DataFetcher
 
 
 def _json_safe(obj):
@@ -23,6 +24,175 @@ router = APIRouter(prefix="/backtest", tags=["backtest"])
 
 # In-memory status tracker for running backtests
 _backtest_status = {}
+
+
+async def fetch_market_context(pair: str, timeframe: str, start_date: str, end_date: str) -> dict:
+    """Fetch OHLCV from exchange (Binance-first) for the backtest period and compute market stats."""
+    try:
+        import pandas as pd
+        import ta as ta_lib
+
+        fetcher = DataFetcher()
+        try:
+            df = await fetcher.fetch_ohlcv(
+                pair=pair, timeframe=timeframe,
+                start_date=start_date, end_date=end_date,
+            )
+        finally:
+            await fetcher.close()
+
+        if df is None or len(df) < 20:
+            return {"error": f"Data OHLCV tidak cukup ({0 if df is None else len(df)} bar)"}
+
+        close = df["close"]
+        high = df["high"]
+        low = df["low"]
+        volume = df["volume"]
+
+        # Trend via EMA stack
+        ema20 = close.ewm(span=20).mean()
+        ema50 = close.ewm(span=50).mean()
+        ema200 = close.ewm(span=min(200, max(50, len(close) // 3))).mean()
+        e20, e50, e200 = float(ema20.iloc[-1]), float(ema50.iloc[-1]), float(ema200.iloc[-1])
+        if e20 > e50 > e200:
+            trend = "uptrend kuat (EMA20>EMA50>EMA200)"
+        elif e20 < e50 < e200:
+            trend = "downtrend kuat (EMA20<EMA50<EMA200)"
+        elif e20 > e50:
+            trend = "uptrend lemah / fase pemulihan"
+        elif e20 < e50:
+            trend = "downtrend lemah / fase koreksi"
+        else:
+            trend = "sideways / ranging"
+
+        period_return_pct = (float(close.iloc[-1]) / float(close.iloc[0]) - 1) * 100
+
+        # ATR volatility
+        atr = ta_lib.volatility.AverageTrueRange(high, low, close, window=14).average_true_range()
+        atr_pct = float((atr / close).mean() * 100)
+
+        # RSI distribution
+        rsi = ta_lib.momentum.RSIIndicator(close, window=14).rsi()
+        rsi_avg = float(rsi.mean())
+        rsi_last = float(rsi.iloc[-1])
+        rsi_oversold_pct = float((rsi < 30).mean() * 100)
+        rsi_overbought_pct = float((rsi > 70).mean() * 100)
+
+        # S/R approximation: rolling extremes
+        sr_res = float(high.tail(min(50, len(df))).max())
+        sr_sup = float(low.tail(min(50, len(df))).min())
+
+        # Volume
+        vol_avg = float(volume.mean())
+        vol_last = float(volume.iloc[-1])
+        vol_ratio = vol_last / vol_avg if vol_avg > 0 else 1.0
+
+        # Compact recent candles so the LLM can "see" price action
+        recent_candles = []
+        for ts, row in df.tail(20).iterrows():
+            recent_candles.append({
+                "t": str(ts),
+                "o": round(float(row["open"]), 2),
+                "h": round(float(row["high"]), 2),
+                "l": round(float(row["low"]), 2),
+                "c": round(float(row["close"]), 2),
+                "v": round(float(row["volume"]), 4),
+            })
+
+        return {
+            "data_source": "Binance OHLCV (via ccxt, fallback otomatis)",
+            "total_bars": len(df),
+            "trend": trend,
+            "period_return_pct": round(period_return_pct, 2),
+            "last_close": round(float(close.iloc[-1]), 2),
+            "period_high": round(float(high.max()), 2),
+            "period_low": round(float(low.min()), 2),
+            "atr14_pct_avg": round(atr_pct, 3),
+            "rsi14_avg": round(rsi_avg, 1),
+            "rsi14_last": round(rsi_last, 1),
+            "rsi_oversold_pct_bars": round(rsi_oversold_pct, 1),
+            "rsi_overbought_pct_bars": round(rsi_overbought_pct, 1),
+            "short_term_resistance": round(sr_res, 2),
+            "short_term_support": round(sr_sup, 2),
+            "volume_avg": round(vol_avg, 4),
+            "volume_last_vs_avg_ratio": round(vol_ratio, 2),
+            "recent_candles": recent_candles,
+        }
+    except Exception as e:
+        logger.warning(f"Market context fetch failed for {pair}: {e}")
+        return {"error": f"Gagal mengambil data pasar: {e}"}
+
+
+def build_trade_samples(trade_log: list, max_losers: int = 8, max_winners: int = 8) -> dict:
+    """Pick the worst losers and best winners so AI can diagnose concrete failures."""
+    trades = [t for t in (trade_log or []) if isinstance(t, dict)]
+    losers = sorted(
+        [t for t in trades if not t.get("is_win")],
+        key=lambda x: float(x.get("pnl_usd") or 0),
+    )[:max_losers]
+    winners = sorted(
+        [t for t in trades if t.get("is_win")],
+        key=lambda x: float(x.get("pnl_usd") or 0),
+        reverse=True,
+    )[:max_winners]
+
+    def slim(t: dict) -> dict:
+        return {
+            "trade_num": t.get("trade_num"),
+            "entry_date": t.get("entry_date"),
+            "exit_date": t.get("exit_date"),
+            "direction": t.get("direction"),
+            "entry_price": t.get("entry_price"),
+            "exit_price": t.get("exit_price"),
+            "pnl_pct": t.get("pnl_pct"),
+            "pnl_usd": t.get("pnl_usd"),
+            "exit_reason": t.get("exit_reason"),
+        }
+
+    return {
+        "total_trades": len(trades),
+        "worst_losers": [slim(t) for t in losers],
+        "best_winners": [slim(t) for t in winners],
+    }
+
+
+def build_equity_insight(equity_curve: list) -> dict:
+    """Summarize equity curve: max DD window + downsampled series for the prompt."""
+    points = [p for p in (equity_curve or []) if isinstance(p, dict) and p.get("value") is not None]
+    if not points:
+        return {}
+
+    values = [float(p["value"]) for p in points]
+    peak = values[0]
+    peak_idx = 0
+    max_dd = 0.0
+    dd_start = dd_end = 0
+    for i, v in enumerate(values):
+        if v > peak:
+            peak = v
+            peak_idx = i
+        dd = (peak - v) / peak if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+            dd_start = peak_idx
+            dd_end = i
+
+    # Downsample to ~40 points so prompt stays compact
+    step = max(1, len(points) // 40)
+    sampled = points[::step]
+    if sampled[-1] is not points[-1]:
+        sampled.append(points[-1])
+
+    return {
+        "max_drawdown_pct": round(max_dd * 100, 2),
+        "max_dd_start_date": points[dd_start].get("date"),
+        "max_dd_bottom_date": points[dd_end].get("date"),
+        "final_equity": values[-1],
+        "start_equity": values[0],
+        "equity_sample": [
+            {"date": p.get("date"), "value": p.get("value")} for p in sampled
+        ],
+    }
 
 
 async def _run_and_save_backtest(
@@ -206,6 +376,17 @@ async def ai_optimize_backtest(
     }
 
     user_goal = request.user_goal if request else None
+
+    # Enrich with real market data (Binance OHLCV) + concrete trade/equity samples
+    market_context = await fetch_market_context(
+        pair=backtest.pair,
+        timeframe=backtest.timeframe,
+        start_date=backtest.start_date,
+        end_date=backtest.end_date,
+    )
+    trade_samples = build_trade_samples(backtest.trade_log)
+    equity_insight = build_equity_insight(backtest.equity_curve)
+
     ai_client = AIClient()
     try:
         analysis_result = await ai_client.analyze_and_optimize_backtest(
@@ -213,6 +394,9 @@ async def ai_optimize_backtest(
             strategy_def=strategy.definition,
             backtest_summary=backtest_summary,
             user_goal=user_goal,
+            market_context=market_context,
+            trade_samples=trade_samples,
+            equity_insight=equity_insight,
         )
     except ValueError as ve:
         raise HTTPException(status_code=422, detail=str(ve))
