@@ -25,7 +25,7 @@ TIMEFRAME_MAP = {
 }
 
 
-FALLBACK_EXCHANGES = ["binance", "binanceus", "okx", "gate", "kraken"]
+FALLBACK_EXCHANGES = ["binanceus", "binance", "okx", "gate", "kraken"]
 
 
 class DataFetcher:
@@ -132,9 +132,9 @@ class DataFetcher:
 
                     return df
 
-            except (ccxt.ExchangeNotAvailable, ccxt.AuthenticationError, ccxt.ExchangeError) as e:
+            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
                 err_str = str(e).lower()
-                if "451" in err_str or "restricted location" in err_str or "unavailable" in err_str:
+                if "451" in err_str or "restricted" in err_str or "unavailable" in err_str or "not available" in err_str:
                     logger.warning(f"Exchange '{current_candidate}' restricted: {e}. Trying fallback...")
                     await self.close()
                     continue
@@ -156,9 +156,9 @@ class DataFetcher:
                 ticker = await exchange.fetch_ticker(pair)
                 DataFetcher._active_exchange_id = current_candidate
                 return float(ticker["last"])
-            except (ccxt.ExchangeNotAvailable, ccxt.AuthenticationError, ccxt.ExchangeError) as e:
+            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
                 err_str = str(e).lower()
-                if "451" in err_str or "restricted location" in err_str or "unavailable" in err_str:
+                if "451" in err_str or "restricted" in err_str or "unavailable" in err_str or "not available" in err_str:
                     await self.close()
                     continue
                 raise
@@ -181,9 +181,9 @@ class DataFetcher:
                     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
                     df = df.set_index("timestamp")
                     return df
-            except (ccxt.ExchangeNotAvailable, ccxt.AuthenticationError, ccxt.ExchangeError) as e:
+            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
                 err_str = str(e).lower()
-                if "451" in err_str or "restricted location" in err_str or "unavailable" in err_str:
+                if "451" in err_str or "restricted" in err_str or "unavailable" in err_str or "not available" in err_str:
                     await self.close()
                     continue
                 raise
