@@ -37,9 +37,10 @@ if exist "venv\Scripts\activate.bat" (
 ) else if exist ".venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 )
-echo ===== %DATE% %TIME% starting on port %PORT% ===== ^>^> "%LOG_FILE%"
+set PYTHONUNBUFFERED=1
+>>"%LOG_FILE%" echo ===== %DATE% %TIME% starting on port %PORT% =====
 start "" /B python -m uvicorn app.main:app --host 0.0.0.0 --port %PORT% >> "%LOG_FILE%" 2>&1
-timeout /t 3 /nobreak >nul
+ping -n 4 127.0.0.1 >nul
 goto do_status
 
 :do_stop
@@ -53,7 +54,7 @@ exit /b 0
 
 :do_restart
 call :do_stop
-timeout /t 2 /nobreak >nul
+ping -n 3 127.0.0.1 >nul
 goto do_start
 
 :do_status
