@@ -196,14 +196,21 @@ class SignalScanner:
                         await session.commit()
                         return
 
-                # Fetch latest OHLCV
+                # Fetch latest OHLCV (extra bars needed for long-period indicators like EMA200)
                 fetcher_key = scanner.id
                 if fetcher_key not in _fetchers:
                     _fetchers[fetcher_key] = DataFetcher()
 
                 fetcher = _fetchers[fetcher_key]
                 try:
-                    df = await fetcher.get_latest_ohlcv(pair, timeframe, bars=200)
+                    # Calculate needed bars based on longest indicator period
+                    max_period = 200
+                    for cond in all_conditions:
+                        p = cond.get("params", {}).get("period", 0)
+                        if isinstance(p, (int, float)) and p > max_period:
+                            max_period = int(p)
+                    needed_bars = max(300, max_period + 100)
+                    df = await fetcher.get_latest_ohlcv(pair, timeframe, bars=needed_bars)
                 except Exception as fetch_err:
                     logger.warning(f"Scanner {scanner.id} fetch error for {pair}: {fetch_err}")
                     await session.execute(
